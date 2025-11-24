@@ -267,7 +267,7 @@ scheduler_events = {
 
     "cron": {
         "*/30 * * * *": [
-            "at_biometric_integration.attendance_processing.auto_submit_due_attendances"
+            "at_biometric_integration.utils.attendance_processing.auto_submit_due_attendances"
         ]
     },
     
