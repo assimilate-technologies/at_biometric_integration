@@ -18,7 +18,8 @@
   "attendance_grace_end_mins",
   "notification_settings_section",
   "enable_notifications",
-  "notification_message_template"
+  "notification_message_template",
+  "auto_submit_after_shift_hours"
  ],
  "fields": [
   {
@@ -91,7 +92,13 @@
    "fieldname": "attendance_grace_end_mins",
    "fieldtype": "Int",
    "label": "Attendance Grace End (mins)"
-  }
+  },
+ {
+     "default": "0",
+     "fieldname": "auto_submit_after_shift_hours",
+     "fieldtype": "Int",
+     "label": "Auto Submit After Shift Hours"
+ }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
