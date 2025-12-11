@@ -101,7 +101,8 @@ def create_or_update_attendance(employee, date):
                 "in_time": first["time"] if first else None,
                 "out_time": last["time"] if last else None,
                 "working_hours": working_hours,
-                "status": status
+                "status": status,
+                "shift": shift if shift else None 
             })
             attendance_name = existing
         else:
@@ -113,7 +114,7 @@ def create_or_update_attendance(employee, date):
                 "employee_name": emp.employee_name,
                 "attendance_date": date,
                 "company": emp.company,
-                "shift": shift.name if shift else None,
+                "shift": shift if shift else None,
                 "status": status,
                 "working_hours": working_hours,
                 "in_time": first["time"] if first else None,
