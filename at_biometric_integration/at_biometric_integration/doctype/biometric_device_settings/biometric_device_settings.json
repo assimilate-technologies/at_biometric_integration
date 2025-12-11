@@ -83,34 +83,34 @@
             "write": 1
         },
         {
-            "create": 1,
-            "delete": 1,
-            "email": 1,
-            "print": 1,
+            "create": 0,
+            "delete": 0,
+            "email": 0,
+            "print": 0,
             "read": 1,
             "role": "Employee",
-            "share": 1,
-            "write": 1
+            "share": 0,
+            "write": 0
         },
         {
-            "create": 1,
-            "delete": 1,
-            "email": 1,
-            "print": 1,
+            "create": 0,
+            "delete": 0,
+            "email": 0,
+            "print": 0,
             "read": 1,
             "role": "HR User",
-            "share": 1,
-            "write": 1
+            "share": 0,
+            "write": 0
         },
         {
-            "create": 1,
-            "delete": 1,
-            "email": 1,
-            "print": 1,
+            "create": 0,
+            "delete": 0,
+            "email": 0,
+            "print": 0,
             "read": 1,
             "role": "Employee Self Service",
-            "share": 1,
-            "write": 1
+            "share": 0,
+            "write": 0
         },
         {
             "create": 1,
@@ -123,14 +123,14 @@
             "write": 1
         },
         {
-            "create": 1,
-            "delete": 1,
-            "email": 1,
-            "print": 1,
+            "create": 0,
+            "delete": 0,
+            "email": 0,
+            "print": 0,
             "read": 1,
             "role": "Project Manager",
-            "share": 1,
-            "write": 1
+            "share": 0,
+            "write": 0
         },
         {
             "create": 1,
@@ -141,6 +141,36 @@
             "role": "Project User",
             "share": 1,
             "write": 1
+        },
+        {
+            "create": 1,
+            "delete": 1,
+            "email": 1,
+            "print": 1,
+            "read": 1,
+            "role": "Biometric Integration Manager",
+            "share": 1,
+            "write": 1
+        },
+        {
+            "create": 1,
+            "delete": 1,
+            "email": 1,
+            "print": 1,
+            "read": 1,
+            "role": "Administrator",
+            "share": 1,
+            "write": 1
+        },
+        {
+            "create": 0,
+            "delete": 0,
+            "email": 0,
+            "print": 0,
+            "read": 1,
+            "role": "Biometric Integration User",
+            "share": 1,
+            "write": 0
         }
     ],
     "sort_field": "modified",

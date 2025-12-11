@@ -253,28 +253,24 @@ doctype_list_js = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+# scheduler_events for hooks
 scheduler_events = {
-
     "cron": {
-        "*/15 * * * *": [
-            "at_biometric_integration.api.fetch_and_upload_attendance"
+        "*/5 * * * *": [
+            "at_biometric_integration.scheduler.run_attendance_scheduler"
+        ],
+        "*/10 * * * *": [
+            "at_biometric_integration.utils.auto_submit.auto_submit_due_attendances"
         ]
     },
-
     "hourly": [
         "at_biometric_integration.api.mark_attendance"
     ],
-
-    "cron": {
-        "*/30 * * * *": [
-            "at_biometric_integration.utils.attendance_processing.auto_submit_due_attendances"
-        ]
-    },
-    
     "daily": [
         "at_biometric_integration.utils.cleanup.cleanup_old_attendance_logs"
     ]
 }
+
 
 # scheduler_events = {
 #     "cron": {

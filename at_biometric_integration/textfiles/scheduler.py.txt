@@ -1,0 +1,183 @@
+# scheduler.py
+import frappe
+from frappe.utils import now
+from .biometric_sync import fetch_attendance_from_device, process_attendance_logs
+from .checkin_processing import create_frappe_attendance_multi
+from .attendance_processing import (
+    process_attendance_realtime,
+    auto_submit_new_attendances,
+    auto_submit_due_attendances
+)
+from .cleanup import cleanup_old_attendance_logs
+
+
+def _log(msg, title="Attendance Scheduler"):
+    """Helper logger for scheduler."""
+    frappe.logger().info(f"[Scheduler] {msg}")
+    frappe.log_error(message=msg, title=title)
+
+
+@frappe.whitelist()
+def run_attendance_scheduler():
+    """
+    MASTER SCHEDULER:
+    - Fetch logs from biometric devices
+    - Store/process raw logs
+    - Create check-ins + attendance documents
+    - Recalculate working hours + status (Present, On Leave, Holiday, Half Day)
+    - Auto-submit eligible attendance (shift_end + rules)
+    - Cleanup old logs
+
+    This function is 100% safe to run every 5 minutes.
+    """
+    summary = {
+        "time": now(),
+        "processed_devices": [],
+        "created_attendance": [],
+        "submitted_attendance": [],
+        "messages": [],
+        "errors": []
+    }
+
+    # ============================================================
+    # 1. GET DEVICES
+    # ============================================================
+    try:
+        devices = frappe.get_all(
+            "Biometric Device Settings",
+            fields=["name", "device_ip", "device_port"]
+        )
+    except Exception as e:
+        err = f"Failed to load biometric device settings: {e}"
+        _log(err)
+        return {"errors": [err]}
+
+    if not devices:
+        msg = "No biometric devices configured."
+        _log(msg)
+        summary["messages"].append(msg)
+        return summary
+
+    # ============================================================
+    # 2. PROCESS DEVICES
+    # ============================================================
+    for dev in devices:
+        name = dev.get("name")
+        ip = dev.get("device_ip")
+        port = dev.get("device_port") or 4370
+
+        if not ip:
+            err = f"Device {name} has no configured IP address."
+            _log(err)
+            summary["errors"].append(err)
+            continue
+
+        # --------------------------------------------------------
+        # Fetch logs
+        # --------------------------------------------------------
+        try:
+            logs = fetch_attendance_from_device(ip, port)
+        except Exception as e:
+            err = f"Failed to fetch logs from {ip}:{port} ({name}) - {e}"
+            _log(err)
+            summary["errors"].append(err)
+            continue
+
+        if not logs:
+            summary["messages"].append(f"No logs fetched from {ip}")
+            summary["processed_devices"].append(ip)
+            continue
+
+        # --------------------------------------------------------
+        # Process & store logs
+        # --------------------------------------------------------
+        try:
+            process_attendance_logs(ip, logs)
+        except Exception as e:
+            err = f"Failed to process logs for {ip} - {e}"
+            _log(err)
+            summary["errors"].append(err)
+            continue
+
+        # --------------------------------------------------------
+        # Create attendance records (from freshly processed checkins)
+        # --------------------------------------------------------
+        try:
+            created = create_frappe_attendance_multi([dev])
+            if created:
+                if isinstance(created, list):
+                    summary["created_attendance"].extend(created)
+                else:
+                    summary["created_attendance"].append(str(created))
+        except Exception as e:
+            err = f"Attendance creation failed for device {ip}: {e}"
+            _log(err)
+            summary["errors"].append(err)
+            continue
+
+        summary["processed_devices"].append(ip)
+
+    # ============================================================
+    # 3. CLEANUP OLD LOGS
+    # ============================================================
+    try:
+        cleanup_old_attendance_logs()
+    except Exception as e:
+        err = f"Cleanup failed: {e}"
+        _log(err)
+        summary["errors"].append(err)
+
+    # ============================================================
+    # 4. REBUILD ATTENDANCE (REALTIME ENGINE)
+    # ============================================================
+    try:
+        created_or_updated = process_attendance_realtime()
+        if created_or_updated:
+            frappe.db.commit()
+            summary["created_attendance"].extend(created_or_updated)
+    except Exception as e:
+        err = f"Realtime attendance processing failed: {e}"
+        _log(err)
+        summary["errors"].append(err)
+        created_or_updated = []
+
+    # ============================================================
+    # 5. AUTO-SUBMIT RECENT ATTENDANCES
+    # ============================================================
+    try:
+        if created_or_updated:
+            submitted = auto_submit_new_attendances(created_or_updated)
+            if submitted:
+                summary["submitted_attendance"].extend(submitted)
+    except Exception as e:
+        err = f"Auto-submit (new attendance) failed: {e}"
+        _log(err)
+        summary["errors"].append(err)
+
+    # ============================================================
+    # 6. AUTO-SUBMIT DUE ATTENDANCES
+    # ============================================================
+    try:
+        submitted_due = auto_submit_due_attendances()
+        if submitted_due:
+            summary["submitted_attendance"].extend(submitted_due)
+    except Exception as e:
+        err = f"Auto-submit (due attendances) failed: {e}"
+        _log(err)
+        summary["errors"].append(err)
+
+    # Final commit
+    try:
+        frappe.db.commit()
+    except Exception as e:
+        err = f"Final DB commit failed: {e}"
+        _log(err)
+        summary["errors"].append(err)
+
+    summary["messages"].append(
+        f"Scheduler completed. Devices processed: {len(summary['processed_devices'])}, "
+        f"Attendance created/updated: {len(summary['created_attendance'])}, "
+        f"Attendance submitted: {len(summary['submitted_attendance'])}"
+    )
+
+    return summary

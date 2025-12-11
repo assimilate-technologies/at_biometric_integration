@@ -62,6 +62,7 @@ def execute(filters=None):
     filters = frappe._dict(filters or {})
     columns = [
         {"label": "Employee", "fieldname": "employee", "fieldtype": "Link", "options": "Employee", "width": 160},
+        {"label": "Employee Name", "fieldname": "employee_name", "fieldtype": "Data", "width": 200},
         {"label": "Shift", "fieldname": "shift", "fieldtype": "Link", "options": "Shift Type", "width": 120},
         {"label": "Date", "fieldname": "date", "fieldtype": "Date", "width": 100},
         {"label": "In Time", "fieldname": "in_time", "fieldtype": "Data", "width": 100},
