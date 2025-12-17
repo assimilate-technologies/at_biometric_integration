@@ -54,7 +54,9 @@ def create_frappe_checkins_from_devices(devices):
             "time": r.get("timestamp"),
             "log_type": log_type,
             "device_id": r.get("uid"),
-            "device_ip": r.get("device_ip")
+            "device_ip": r.get("device_ip"),
+            "latitude": 0.0,
+            "longitude": 0.0,
         })
 
     for doc in to_insert:
