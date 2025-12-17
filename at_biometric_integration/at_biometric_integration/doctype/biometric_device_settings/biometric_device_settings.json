@@ -2,7 +2,7 @@
     "actions": [],
     "allow_rename": 1,
     "creation": "2025-02-27 11:54:53.059976",
-    "autoname": "field:device_name",
+    "autoname": "format:DEVICE-{#####}",
     "doctype": "DocType",
     "engine": "InnoDB",
     "field_order": [
@@ -67,7 +67,7 @@
     "modified_by": "Administrator",
     "module": "At Biometric Integration",
     "name": "Biometric Device Settings",
-    "naming_rule": "By fieldname",
+    "naming_rule": "Expression",
     "owner": "Administrator",
     "permissions": [
         {
