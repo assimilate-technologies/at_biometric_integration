@@ -36,110 +36,132 @@ def link_checkins_to_attendance(attendance_name, employee, attendance_date):
     except Exception as e:
         log_error(e, "link_checkins_to_attendance")
 
-def process_attendance_realtime(date=None):
+def process_attendance_realtime(from_date=None, to_date=None):
     """
-    Process checkins for the given date (default today).
-    Returns a list of created/updated attendance names.
+    Process attendance for all dates where check-ins exist.
+    Updates attendance ONLY when IN/OUT mismatch.
     """
+
     processed = []
-    if date is None:
-        date = getdate()
+
+    if not from_date:
+        from_date = frappe.db.sql("""
+            SELECT DATE(MIN(time))
+            FROM `tabEmployee Checkin`
+        """)[0][0]
+
+
+    if not to_date:
+        to_date = getdate()
 
     try:
-        # fetch employees who have checkins on date
-        employees = frappe.db.sql_list("""
-            select distinct employee from `tabEmployee Checkin`
-            where date(time) = %s
-        """, (date,))
+        rows = frappe.db.sql("""
+            SELECT
+                employee,
+                DATE(time) AS att_date,
+                MIN(time) AS first_in,
+                MAX(time) AS last_out
+            FROM `tabEmployee Checkin`
+            WHERE date(time) BETWEEN %s AND %s
+            GROUP BY employee, DATE(time)
+        """, (from_date, to_date), as_dict=True)
 
-        for emp in employees:
-            try:
-                name = create_or_update_attendance(emp, date)
-                if name:
-                    processed.append(name)
-            except Exception as e:
-                log_error(f"process_employee {emp} failed: {e}", "process_attendance_realtime")
+        for row in rows:
+            name = create_or_update_attendance_if_needed(
+                row.employee,
+                row.att_date,
+                row.first_in,
+                row.last_out
+            )
+            if name:
+                processed.append(name)
+
         return processed
+
     except Exception as e:
         log_error(e, "process_attendance_realtime")
         return processed
 
-def create_or_update_attendance(employee, date):
-    """
-    Build or update Attendance for employee on date using first/last checkin.
-    Applies Option B: leave/holiday override.
-    """
-    try:
-        first = frappe.db.sql("""
-            select name, time from `tabEmployee Checkin`
-            where employee=%s and date(time) = %s
-            order by time asc limit 1
-        """, (employee, date), as_dict=True)
-        last = frappe.db.sql("""
-            select name, time from `tabEmployee Checkin`
-            where employee=%s and date(time) = %s
-            order by time desc limit 1
-        """, (employee, date), as_dict=True)
 
-        first = first[0] if first else None
-        last = last[0] if last else None
+def create_or_update_attendance_if_needed(employee, date, first_in, last_out):
+    """
+    Update attendance ONLY when IN/OUT mismatch
+    and when rules allow update.
+    """
+
+    try:
+        att = frappe.db.get_value(
+            "Attendance",
+            {"employee": employee, "attendance_date": date},
+            ["name", "in_time", "out_time", "docstatus"],
+            as_dict=True
+        )
+
+        # Skip submitted attendance
+        if att and att.docstatus == 1:
+            return None
+
+        # Skip regularization / attendance request cases
+        if has_pending_regularization(employee, date) or has_approved_regularization(employee, date):
+            return None
+
+        # Skip if no change in times
+        if att and att.in_time == first_in and att.out_time == last_out:
+            return None
 
         leave_status = get_leave_status(employee, date)
         holiday_flag = is_holiday(employee, date)
         shift = get_employee_shift(employee, date)
 
-        working_hours = 0.0
-        if first and last:
-            working_hours = calculate_working_hours({"time": first["time"]}, {"time": last["time"]})
+        working_hours = calculate_working_hours(
+            {"time": first_in}, {"time": last_out}
+        ) if first_in and last_out else 0
 
-        status = determine_attendance_status(working_hours, leave_status, holiday_flag)
-        existing = frappe.db.get_value("Attendance", {"employee": employee, "attendance_date": date}, "name")
+        status = determine_attendance_status(
+            working_hours, leave_status, holiday_flag
+        )
 
-        if existing:
-            # update
-            frappe.db.set_value("Attendance", existing, {
-                "in_time": first["time"] if first else None,
-                "out_time": last["time"] if last else None,
+        if att:
+            frappe.db.set_value("Attendance", att.name, {
+                "in_time": first_in,
+                "out_time": last_out,
                 "working_hours": working_hours,
                 "status": status,
-                "shift": shift if shift else None 
+                "shift": shift
             })
-            attendance_name = existing
+            attendance_name = att.name
+
         else:
-            # insert
             emp = frappe.get_doc("Employee", employee)
-            att_doc = frappe.get_doc({
+            doc = frappe.get_doc({
                 "doctype": "Attendance",
                 "employee": employee,
                 "employee_name": emp.employee_name,
                 "attendance_date": date,
                 "company": emp.company,
-                "shift": shift if shift else None,
+                "shift": shift,
                 "status": status,
                 "working_hours": working_hours,
-                "in_time": first["time"] if first else None,
-                "out_time": last["time"] if last else None
+                "in_time": first_in,
+                "out_time": last_out
             })
-            att_doc.insert(ignore_permissions=True)
-            attendance_name = att_doc.name
+            doc.insert(ignore_permissions=True)
+            attendance_name = doc.name
 
-        # link checkins
+        # Link checkins safely
         link_checkins_to_attendance(attendance_name, employee, date)
 
-        # attempt auto submit if eligible and no pending reg
-        # use central can_auto_submit function that reads settings
+        # Auto submit only if allowed
         att_doc = frappe.get_doc("Attendance", attendance_name)
         if can_auto_submit(att_doc):
-            try:
-                att_doc.submit()
-            except Exception as e:
-                log_error(f"Auto-submit failed for {attendance_name}: {e}", "Auto Submit")
+            att_doc.submit()
 
-        frappe.db.commit()
         return attendance_name
+
     except Exception as e:
-        log_error(f"create_or_update_attendance failed for {employee} {date}: {e}", "Create/Update Attendance")
+        log_error(f"{employee} {date}: {e}", "create_or_update_attendance_if_needed")
         return None
+
 
 def mark_absent_for_date(employee, date):
     """
