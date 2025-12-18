@@ -166,12 +166,22 @@ def calculate_working_hours(first_checkin, last_checkin):
     try:
         if not first_checkin or not last_checkin:
             return 0.0
+
+        # CASE 1: already datetime (your current usage)
+        if isinstance(first_checkin, (str,)) or not hasattr(first_checkin, "get"):
+            in_t = get_datetime(first_checkin)
+            out_t = get_datetime(last_checkin)
+            return calculate_working_hours_from_times(in_t, out_t)
+
+        # CASE 2: dict or doc with time key
         in_t = first_checkin.get("time") if isinstance(first_checkin, dict) else getattr(first_checkin, "time", None)
         out_t = last_checkin.get("time") if isinstance(last_checkin, dict) else getattr(last_checkin, "time", None)
+
         return calculate_working_hours_from_times(get_datetime(in_t), get_datetime(out_t))
     except Exception as e:
         log_error(e, "calculate_working_hours")
         return 0.0
+
 
 # ------------------------------------------------
 # Status determination (Option B)

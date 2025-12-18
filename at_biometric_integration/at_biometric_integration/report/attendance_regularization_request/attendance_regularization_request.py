@@ -2,6 +2,12 @@
 import frappe
 from datetime import datetime, timedelta, date, time
 from frappe.utils import getdate, format_time, get_datetime
+from at_biometric_integration.utils.helpers import (
+    calculate_working_hours, 
+    determine_attendance_status, 
+    get_leave_status, 
+    is_holiday
+)
 
 
 def execute(filters=None):
@@ -98,7 +104,41 @@ def execute(filters=None):
         elif not out_time:
             missed_punch = "OUT"
 
-        status = record.status or ("Missed Punch" if missed_punch != "-" else "Present")
+        # ---------------- Dynamic Hours & Status ----------------
+        # 1. Fetch Checkins if missing (Fix for historical data)
+        # If DB says invalid (None or 0) for hours, AND we lack time data, try to fetch from checkins
+        if (not record.working_hours or record.working_hours == 0) and (not record.in_time or not record.out_time):
+            cin, cout = get_checkin_times(emp, att_date)
+            if cin:
+                record.in_time = cin
+                record.in_time_fetched = True  # marker
+                in_time = format_time_only(cin)
+            if cout:
+                record.out_time = cout
+                record.out_time_fetched = True
+                out_time = format_time_only(cout)
+
+        # 2. Calculate Working Hours if missing
+        # Now we might have times from DB or fetched above
+        if (not record.working_hours or record.working_hours == 0) and record.in_time and record.out_time:
+            w_hours = calculate_working_hours(record.in_time, record.out_time)
+            if w_hours > 0:
+                record.working_hours = w_hours
+                formatted_working_hours = f"{int(w_hours):02d}:{int(round((w_hours - int(w_hours)) * 60)):02d}"
+
+        # 3. Get Leave & Holiday Info (using helpers to enable dynamic status)
+        leave_info = get_leave_status(emp, att_date) # (status, type, name)
+        holiday_flag = is_holiday(emp, att_date)
+        
+        # 3. Determine Status dynamically based on (new) hours
+        # Only override if we have calculated hours or if status is not finalized
+        if record.working_hours or not record.status:
+            # pass 0.0 if None
+            wh_val = float(record.working_hours or 0.0)
+            status = determine_attendance_status(wh_val, leave_info, holiday_flag)
+        else:
+            status = record.status or ("Missed Punch" if missed_punch != "-" else "Present")
+
         remarks = []
         eligible = False
         disable_action = False
@@ -107,13 +147,8 @@ def execute(filters=None):
         if not enable_feature:
             remarks.append("Regularization Disabled")
 
-        # Check for leave
-        has_leave = frappe.db.exists("Leave Application", {
-            "employee": emp,
-            "from_date": ["<=", att_date],
-            "to_date": [">=", att_date],
-            "status": "Approved"
-        })
+        # Check for leave (using result from helper above)
+        has_leave = bool(leave_info[0])
 
         # Calculate hours since attendance date
         hours_passed = calculate_hours_excluding_weekends(att_date, today_dt)
@@ -229,8 +264,22 @@ def send_regularization_notification(employee, att_date, template):
 # Calculate hours since attendance date (excluding weekends)
 def calculate_hours_excluding_weekends(start_date, end_datetime):
     """Return total hours difference excluding weekends (Saturday/Sunday)."""
-    current_date = start_date
-    total_hours = 0
+    current_date = start_date    return total_hours
+
+def get_checkin_times(employee, date):
+    """Return earliest and latest checkin times for the employee on the given date (from summary report logic)."""
+    checkins = frappe.get_all("Employee Checkin",
+        filters={
+            "employee": employee,
+            "time": ["between", [f"{date} 00:00:00", f"{date} 23:59:59"]]
+        },
+        fields=["time"],
+        order_by="time"
+    )
+    if not checkins:
+        return None, None
+    times = [c.time for c in checkins]
+    return min(times), max(times)    total_hours = 0
 
     while current_date <= end_datetime.date():
         if current_date.weekday() < 5:  # 0 = Monday, 6 = Sunday
