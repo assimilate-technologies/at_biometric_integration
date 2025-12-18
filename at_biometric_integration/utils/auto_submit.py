@@ -18,5 +18,5 @@ def auto_submit_due_attendances():
             frappe.db.commit()
         return submitted
     except Exception as e:
-        log_error(e, "auto_submit_due_attendances")
+        log_error(e, "auto_submit_due_attendances ")
         return []
