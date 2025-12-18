@@ -113,8 +113,8 @@ def process_attendance_logs(ip, logs):
                     "log_type": log_type,
                     "device_id": log.user_id,
                     "device_ip": ip,
-                    "latitude": 0.0,
-                    "longitude": 0.0,
+                    "latitude": "0.0",
+                    "longitude": "0.0",
                 }).insert(ignore_permissions=True)
             except Exception as e:
                 log_error(f"Failed to insert checkin for employee {employee}: {e}", "Checkin Insert Error")
