@@ -334,7 +334,9 @@ def execute(filters=None):
             filters.from_date = start_of_week
             filters.to_date = start_of_week + timedelta(days=6)
     elif period == "Daily":
-        filters.from_date = filters.to_date = today
+            filters.from_date = getdate(filters.get("from_date") or today)
+            filters.to_date = filters.from_date
+
     else:
         filters.from_date = getdate(filters.get("from_date") or today)
         filters.to_date = getdate(filters.get("to_date") or today)

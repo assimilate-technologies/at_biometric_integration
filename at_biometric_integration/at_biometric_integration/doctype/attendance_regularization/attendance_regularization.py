@@ -1,6 +1,7 @@
 from frappe.model.document import Document
 import frappe
 from datetime import datetime, time, timedelta
+from at_biometric_integration.utils.helpers import get_leave_status, is_holiday, determine_attendance_status
 
 class AttendanceRegularization(Document):
     def on_submit(self):
@@ -76,8 +77,8 @@ class AttendanceRegularization(Document):
                 "time": time,
                 "log_type": log_type,
                 "company": company,
-                "latitude": 0.0,
-                "longitude": 0.0
+                "latitude": "0.0",
+                "longitude": "0.0"
             }).insert(ignore_permissions=True)
 
     def create_or_update_attendance(self, employee_details, in_time=None, out_time=None):
@@ -95,11 +96,16 @@ class AttendanceRegularization(Document):
             diff = out_time - in_time
             working_hours = round(diff.total_seconds() / 3600, 2)
 
+        # Calculate status dynamically
+        leave_status = get_leave_status(self.employee, self.date)
+        holiday_flag = is_holiday(self.employee, self.date)
+        status = determine_attendance_status(working_hours, leave_status, holiday_flag)
+
         attendance_data = {
             "employee": self.employee,
             "employee_name": self.employee_name,
             "attendance_date": self.date,
-            "status": self.attendance_status,
+            "status": status,
             "company": employee_details.company,
             "shift": employee_details.default_shift,
             "docstatus": 1,

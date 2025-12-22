@@ -172,8 +172,14 @@ async function fetch_system_checkin_times(frm) {
             return m ? m[1] : null;
         };
 
-        frm.set_value("system_in_time", extract(first));
-        frm.set_value("system_out_time", extract(last));
+        const in_val = extract(first);
+        const out_val = extract(last);
+
+        frm.set_value("system_in_time", in_val);
+        frm.set_value("system_out_time", out_val);
+
+        if (in_val && !frm.doc.in_time) frm.set_value("in_time", in_val);
+        if (out_val && !frm.doc.out_time) frm.set_value("out_time", out_val);
 
     } catch (err) {
         console.error("Checkin Fetch Error:", err);
