@@ -5,16 +5,26 @@
 
 frappe.listview_settings['Employee Checkin'] = {
     onload: function (listview) {
-        // Allow only authorized roles
-        const allowed_roles = [
-            'System Manager',
-            'HR Manager',
-            'Administrator',
-            'Biometric Integration Manager',
-            'Workspace Manager'
-        ];
+        // Allow only authorized roles, Allow Administrator always
+         
+        if (frappe.session.user !== "Administrator") {
+            // Allow only authorized roles
+            const allowed_roles = [
+                'System Manager',
+                'HR Manager',
+                'Biometric Integration Manager',
+                'Workspace Manager',
+                'HR User',
+                'Dashboard Manager',
+                'Project Manager',
+                'Report Manager'
+            ];
 
-        if (!allowed_roles.some(role => frappe.user.has_role(role))) return;
+            if (!allowed_roles.some(role => frappe.user.has_role(role))) {
+                return;
+            }
+        }
+
 
         // Check if any Biometric Device Settings exist before adding buttons
         frappe.db.get_value('Biometric Device Settings', {}, 'name').then(res => {

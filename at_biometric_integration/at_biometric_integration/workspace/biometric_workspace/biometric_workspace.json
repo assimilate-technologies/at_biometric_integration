@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\":\"title-block\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Biometric Workspace</span>\",\"col\":12}},{\"id\":\"daily-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Daily Attendance Report\",\"col\":4}},{\"id\":\"weekly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Weekly Attendance Report\",\"col\":4}},{\"id\":\"XACquFIK57\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Report\",\"col\":4}},{\"id\":\"cKiR2-jfVQ\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Attendance Regularization Request\",\"col\":4}},{\"id\":\"monthly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Report\",\"col\":3}},{\"id\":\"8-K9k9cZ_B\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"iGjqTDE5jd\",\"type\":\"card\",\"data\":{\"card_name\":\"Master\",\"col\":4}},{\"id\":\"mmgIlPPpny\",\"type\":\"card\",\"data\":{\"card_name\":\"Settings\",\"col\":4}}]",
+ "content": "[{\"id\":\"title-block\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Biometric Workspace</span>\",\"col\":12}},{\"id\":\"daily-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Daily Attendance Report\",\"col\":4}},{\"id\":\"weekly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Weekly Attendance Report\",\"col\":4}},{\"id\":\"XACquFIK57\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Report\",\"col\":4}},{\"id\":\"cKiR2-jfVQ\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Attendance Regularization Request\",\"col\":4}},{\"id\":\"monthly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Summary Report\",\"col\":3}},{\"id\":\"8-K9k9cZ_B\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"iGjqTDE5jd\",\"type\":\"card\",\"data\":{\"card_name\":\"Master\",\"col\":4}},{\"id\":\"mmgIlPPpny\",\"type\":\"card\",\"data\":{\"card_name\":\"Settings\",\"col\":4}}]",
  "creation": "2025-10-31 13:37:13.134452",
  "custom_blocks": [],
  "docstatus": 0,
@@ -62,7 +62,7 @@
    "type": "Link"
   }
  ],
- "modified": "2025-11-10 16:52:34.939510",
+ "modified": "2025-11-27 15:13:39.715632",
  "modified_by": "Administrator",
  "module": "At Biometric Integration",
  "name": "Biometric Workspace",
@@ -99,6 +99,13 @@
  ],
  "sequence_id": 0.0,
  "shortcuts": [
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Monthly Attendance Summary Report",
+   "type": "URL",
+   "url": "/app/query-report/Monthly%20Attendance%20Summary"
+  },
   {
    "color": "Grey",
    "doc_view": "",

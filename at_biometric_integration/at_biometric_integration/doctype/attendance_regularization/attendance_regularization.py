@@ -1,6 +1,7 @@
 from frappe.model.document import Document
 import frappe
 from datetime import datetime, time, timedelta
+from at_biometric_integration.utils.helpers import get_leave_status, is_holiday, determine_attendance_status
 
 class AttendanceRegularization(Document):
     def on_submit(self):
@@ -41,6 +42,9 @@ class AttendanceRegularization(Document):
             else:
                 frappe.throw("Invalid time format for in_time or out_time.")
 
+        in_time_dt = None
+        out_time_dt = None
+
         # Create or update Employee Checkin for IN time
         if self.in_time:
             in_time_dt = combine_date_time(self.date, self.in_time)
@@ -52,7 +56,7 @@ class AttendanceRegularization(Document):
             self.create_or_update_checkin(self.employee, out_time_dt, "OUT", employee_details.company)
 
         # Create or update Attendance record
-        self.create_or_update_attendance(employee_details)
+        self.create_or_update_attendance(employee_details, in_time_dt, out_time_dt)
 
     def create_or_update_checkin(self, employee, time, log_type, company):
         """
@@ -73,11 +77,11 @@ class AttendanceRegularization(Document):
                 "time": time,
                 "log_type": log_type,
                 "company": company,
-                "latitude": 0.0,
-                "longitude": 0.0
+                "latitude": "0.0",
+                "longitude": "0.0"
             }).insert(ignore_permissions=True)
 
-    def create_or_update_attendance(self, employee_details):
+    def create_or_update_attendance(self, employee_details, in_time=None, out_time=None):
         """
         Create or update Attendance record.
         """
@@ -87,14 +91,27 @@ class AttendanceRegularization(Document):
             "name"
         )
 
+        working_hours = 0.0
+        if in_time and out_time:
+            diff = out_time - in_time
+            working_hours = round(diff.total_seconds() / 3600, 2)
+
+        # Calculate status dynamically
+        leave_status = get_leave_status(self.employee, self.date)
+        holiday_flag = is_holiday(self.employee, self.date)
+        status = determine_attendance_status(working_hours, leave_status, holiday_flag)
+
         attendance_data = {
             "employee": self.employee,
             "employee_name": self.employee_name,
             "attendance_date": self.date,
-            "status": self.attendance_status,
+            "status": status,
             "company": employee_details.company,
             "shift": employee_details.default_shift,
-            "docstatus": 1
+            "docstatus": 1,
+            "in_time": in_time,
+            "out_time": out_time,
+            "working_hours": working_hours
         }
 
         if existing_attendance:
