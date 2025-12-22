@@ -5,67 +5,76 @@ from frappe import _
 
 @frappe.whitelist()
 def fetch_and_upload_attendance():
-    """
-    Master controller called by scheduler:
-      - fetch logs from devices
-      - store JSON
-      - create checkins
-      - build attendance
-      - try auto-submit
-      - cleanup
-    """
-    response = {"processed": [], "created_checkins": [], "created_attendance": [], "submitted": [], "errors": []}
+    response = {
+        "processed": [],
+        "created_checkins": [],
+        "created_attendance": [],
+        "submitted": [],
+        "errors": []
+    }
 
-    devices = frappe.get_all("Biometric Device Settings", fields=["device_ip", "device_port", "name"])
+    devices = frappe.get_all(
+        "Biometric Device Settings",
+        fields=["device_ip", "device_port"]
+    )
+
     if not devices:
-        response["errors"].append("No biometric devices configured.")
+        response["errors"].append("No biometric devices configured")
         return response
 
+    # -------------------------
+    # PHASE 1: DEVICE → JSON
+    # -------------------------
     for dev in devices:
-        ip = dev.get("device_ip")
-        port = dev.get("device_port") or 4370
-        try:
-            # fetch ALL logs from device
-            logs = biometric_sync.fetch_attendance_from_device(ip, port)
-            if not logs:
-                # still try to create checkins from existing JSON if present
-                created = checkin_processing.create_frappe_checkins_from_devices([dev])
-                if created:
-                    response["created_checkins"].extend(created)
-                response["processed"].append(ip)
-                continue
+        ip = dev.device_ip
+        port = dev.device_port or 4370
 
-            # process logs into JSON store
-            new = biometric_sync.process_attendance_logs(ip, logs)
-            # create checkins from JSON
-            created = checkin_processing.create_frappe_checkins_from_devices([dev])
-            if created:
-                response["created_checkins"].extend(created)
-            # build attendance for today
-            processed = attendance_processing.process_attendance_realtime()
-            if processed:
-                response["created_attendance"].extend(processed)
+        try:
+            logs = biometric_sync.fetch_attendance_from_device(ip, port)
+            biometric_sync.process_attendance_logs(ip, logs)
             response["processed"].append(ip)
         except Exception as e:
-            frappe.log_error(e, "fetch_and_upload_attendance")
-            response["errors"].append(str(e))
+            frappe.log_error(str(e), "Biometric Sync")
+            response["errors"].append(f"{ip}: {e}")
 
-    # try auto-submit due attendances
+    # -------------------------
+    # PHASE 2: JSON → CHECKINS
+    # -------------------------
+    try:
+        created = checkin_processing.create_frappe_checkins_from_devices(devices)
+        response["created_checkins"] = created
+    except Exception as e:
+        frappe.log_error(str(e), "Checkin Creation")
+        response["errors"].append(str(e))
+
+    # -------------------------
+    # PHASE 3: ATTENDANCE (ONCE)
+    # -------------------------
+    try:
+        created_att = attendance_processing.process_attendance_realtime()
+        if created_att:
+            response["created_attendance"] = created_att
+    except Exception as e:
+        frappe.log_error(str(e), "Attendance Processing")
+        response["errors"].append(str(e))
+
+    # -------------------------
+    # PHASE 4: AUTO SUBMIT
+    # -------------------------
     try:
         submitted = auto_submit.auto_submit_due_attendances()
         if submitted:
-            response["submitted"].extend(submitted)
+            response["submitted"] = submitted
     except Exception as e:
-        frappe.log_error(e, "auto_submit")
-        response["errors"].append(str(e))
+        frappe.log_error(str(e), "Auto Submit")
 
-    # cleanup old json files
-    try:
-        cleanup.cleanup_old_attendance_logs()
-    except Exception as e:
-        frappe.log_error(e, "cleanup")
+    # -------------------------
+    # PHASE 5: CLEANUP
+    # -------------------------
+    cleanup.cleanup_old_attendance_logs()
 
     return response
+
 
 @frappe.whitelist()
 def mark_attendance():
