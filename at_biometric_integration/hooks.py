@@ -255,18 +255,15 @@ doctype_list_js = {
 
 # scheduler_events for hooks
 scheduler_events = {
-     "cron": {
+    "cron": {
         "*/15 * * * *": [
             "at_biometric_integration.api.fetch_and_upload_attendance"
-        ]
-    },
-
-    "cron": {
+        ],
         "*/5 * * * *": [
             "at_biometric_integration.scheduler.run_attendance_scheduler"
         ],
         "*/10 * * * *": [
-            "at_biometric_integration.utils.auto_submit.auto_submit_due_attendances"
+            "at_biometric_integration.utils.attendance_processing.auto_submit_due_attendances"
         ]
     },
     "hourly": [

@@ -249,7 +249,7 @@ from datetime import datetime, timedelta
 from frappe.utils import get_datetime, now_datetime
 
 # helpers expected to exist in your repo (you referenced them before)
-from .helpers import get_leave_status, is_holiday, calculate_working_hours
+from .helpers import get_leave_status, is_holiday, calculate_working_hours, determine_attendance_status
 
 # ------------------
 # ASSUMPTIONS / TODO
@@ -357,7 +357,8 @@ def auto_submit_attendance_doc(att_doc, settings):
         doc.status = "Present" if working_hours >= settings.min_working_hours else "Half Day"
 
         # Submit with ignore permissions to allow scheduler/whitelisted calls to submit
-        doc.submit(ignore_permissions=True)
+        doc.flags.ignore_permissions = True
+        doc.submit()
         frappe.db.commit()
         frappe.publish_realtime(event="attendance_auto_submitted", message={"name": doc.name})
         return True
@@ -380,7 +381,7 @@ def auto_submit_due_attendances():
     # query open attendance records (docstatus = 0)
     open_att = frappe.get_all("Attendance", filters={"docstatus": 0}, fields=[
         "name", "employee", "attendance_date", "in_time", "out_time", "working_hours", "shift"
-    ])
+    ], limit_page_length=50000)
 
     submitted_any = []
     for a in open_att:
@@ -442,7 +443,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None):
         "Employee Checkin",
         filters={"employee": employee},
         fields=["name", "time", "log_type"],
-        order_by="time asc"
+        order_by="time asc", 
+        limit_page_length=50000
     )
 
     by_date = {}
@@ -455,7 +457,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None):
             continue
         first, last = daily[0], daily[-1]
         # FIX: Pass dicts/objects, not lists
-        hours = calculate_working_hours(first, last)
+        hours = calculate_working_hours(first.time, last.time)
+
 
         leave_status = get_leave_status(employee, date)
         holiday_flag = is_holiday(employee, date)
@@ -511,7 +514,8 @@ def auto_submit_new_attendances(attendance_names):
 
             if now >= (shift_end_dt + timedelta(hours=4)):
                 if (doc.working_hours or 0) >= settings.min_working_hours:
-                    doc.submit(ignore_permissions=True)
+                    doc.flags.ignore_permissions = True
+                    doc.submit()
                     submitted.append(name)
                     continue
 
@@ -519,7 +523,8 @@ def auto_submit_new_attendances(attendance_names):
                 reg_to = float(settings.regularization_to_hours or 0)
                 if now >= (shift_end_dt + timedelta(hours=reg_to)):
                     if (doc.working_hours or 0) >= settings.min_working_hours:
-                        doc.submit(ignore_permissions=True)
+                        doc.flags.ignore_permissions = True
+                        doc.submit()
                         submitted.append(name)
                         continue
         except Exception as e:
