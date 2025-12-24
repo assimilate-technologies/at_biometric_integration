@@ -1,0 +1,65 @@
+{
+    "doctype": "Report",
+    "name": "Monthly Attendance",
+    "ref_doctype": "Attendance",
+    "module": "At Biometric Integration",
+    "report_type": "Script Report",
+    "is_standard": "Yes",
+    "filters": [
+      {
+        "fieldname": "period",
+        "label": "Period",
+        "fieldtype": "Select",
+        "options": "Daily\nWeekly\nMonthly",
+        "default": "Daily",
+        "reqd": 1
+      },
+      {
+        "fieldname": "months",
+        "label": "Month",
+        "fieldtype": "Select",
+        "options": "\nJanuary\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember"
+      },
+      {
+        "fieldname": "year",
+        "label": "Year",
+        "fieldtype": "Select"
+        
+      },
+      {
+        "fieldname": "from_date",
+        "label": "From Date",
+        "fieldtype": "Date"
+      },
+      {
+        "fieldname": "to_date",
+        "label": "To Date",
+        "fieldtype": "Date"
+      },
+      {
+        "fieldname": "status",
+        "label": "Status",
+        "fieldtype": "Select",
+        "options": "\nPresent\nAbsent\nHalf Day\nOn Leave\nWork From Home"
+      },
+      {
+        "fieldname": "employee",
+        "label": "Employee",
+        "fieldtype": "Link",
+        "options": "Employee"
+      },
+      {
+        "fieldname": "company",
+        "label": "Company",
+        "fieldtype": "Link",
+        "options": "Company"
+      },
+      {
+        "fieldname": "department",
+        "label": "Department",
+        "fieldtype": "Link",
+        "options": "Department"
+      }
+    ]
+  }
+  

@@ -416,21 +416,29 @@ def auto_submit_due_attendances():
 # ------------------------
 # Realtime processing (when checkins exist)
 # ------------------------
-def process_attendance_realtime():
+def process_attendance_realtime(from_date=None, to_date=None):
     """
-    Recreates the attendance records from Employee Checkin table per employee per date (first and last).
-    This function:
-    - groups checkins by date
-    - calculates working_hours using calculate_working_hours()
-    - inserts or updates Attendance records (docstatus 0)
-    - DOES NOT auto-submit here; returning the list of created/updated attendances for caller to decide.
+    Recreates the attendance records from Employee Checkin table per employee per date.
+    Supports date ranges and ensures all active employees have records.
     """
+    from frappe.utils import getdate, add_days
+    
+    # If dates not provided, look at last 2 days by default to be safe
+    # but for a "fix" run, we might want more.
+    if not to_date:
+        to_date = getdate()
+    if not from_date:
+        from_date = add_days(to_date, -1)
+    
+    from_date = getdate(from_date)
+    to_date = getdate(to_date)
+
     employees = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "default_shift"])
     created_or_updated = []
 
     for emp in employees:
         try:
-            process_employee_attendance_realtime(emp.name, emp.default_shift or "", created_or_updated)
+            process_employee_attendance_realtime(emp.name, emp.default_shift or "", created_or_updated, from_date, to_date)
         except Exception as e:
             frappe.log_error(f"{emp.name} attendance error: {e}", "Realtime Attendance Error")
 
@@ -438,10 +446,21 @@ def process_attendance_realtime():
     return created_or_updated
 
 
-def process_employee_attendance_realtime(employee, shift, created_list=None):
+def process_employee_attendance_realtime(employee, shift, created_list=None, from_date=None, to_date=None):
+    from frappe.utils import getdate, add_days
+    
+    if not from_date or not to_date:
+        # Fallback if range not provided
+        to_date = getdate()
+        from_date = to_date
+
+    # Fetch all checkins for the range at once
     checkins = frappe.get_all(
         "Employee Checkin",
-        filters={"employee": employee},
+        filters={
+            "employee": employee,
+            "time": ["between", [f"{from_date} 00:00:00", f"{to_date} 23:59:59"]]
+        },
         fields=["name", "time", "log_type"],
         order_by="time asc", 
         limit_page_length=50000
@@ -452,23 +471,38 @@ def process_employee_attendance_realtime(employee, shift, created_list=None):
         d = get_datetime(c.time).date()
         by_date.setdefault(d, []).append(c)
 
-    for date, daily in by_date.items():
-        if not daily:
-            continue
-        first, last = daily[0], daily[-1]
-        # FIX: Pass dicts/objects, not lists
-        hours = calculate_working_hours(first.time, last.time)
+    # Iterate through every single day in the range
+    curr_date = from_date
+    while curr_date <= to_date:
+        daily = by_date.get(curr_date, [])
+        
+        hours = 0.0
+        first_time = None
+        last_time = None
+        
+        if daily:
+            first, last = daily[0], daily[-1]
+            first_time = first.time
+            last_time = last.time
+            hours = calculate_working_hours(first_time, last_time)
 
-
-        leave_status = get_leave_status(employee, date)
-        holiday_flag = is_holiday(employee, date)
+        leave_status = get_leave_status(employee, curr_date)
+        holiday_flag = is_holiday(employee, curr_date)
+        
+        # determine_attendance_status handles 0 hours as Absent unless holiday/leave
         status = determine_attendance_status(hours, leave_status, holiday_flag)
 
-        existing_name = frappe.db.exists("Attendance", {"employee": employee, "attendance_date": date})
+        existing_name = frappe.db.exists("Attendance", {
+            "employee": employee, 
+            "attendance_date": curr_date,
+            "docstatus": 0
+        })
+
         if existing_name:
+            # Update only if not submitted
             frappe.db.set_value("Attendance", existing_name, {
-                "in_time": first.time,
-                "out_time": last.time,
+                "in_time": first_time,
+                "out_time": last_time,
                 "working_hours": hours,
                 "status": status,
                 "shift": shift
@@ -476,19 +510,24 @@ def process_employee_attendance_realtime(employee, shift, created_list=None):
             if created_list is not None:
                 created_list.append(existing_name)
         else:
-            doc = frappe.get_doc({
-                "doctype": "Attendance",
-                "employee": employee,
-                "attendance_date": date,
-                "shift": shift,
-                "in_time": first.time,
-                "out_time": last.time,
-                "working_hours": hours,
-                "status": status
-            })
-            doc.insert(ignore_permissions=True)
-            if created_list is not None:
-                created_list.append(doc.name)
+            # Check if submitted record exists; if so, skip to avoid duplicates
+            if not frappe.db.exists("Attendance", {"employee": employee, "attendance_date": curr_date, "docstatus": 1}):
+                doc = frappe.get_doc({
+                    "doctype": "Attendance",
+                    "employee": employee,
+                    "attendance_date": curr_date,
+                    "shift": shift,
+                    "in_time": first_time,
+                    "out_time": last_time,
+                    "working_hours": hours,
+                    "status": status,
+                    "company": frappe.db.get_value("Employee", employee, "company")
+                })
+                doc.insert(ignore_permissions=True)
+                if created_list is not None:
+                    created_list.append(doc.name)
+        
+        curr_date = add_days(curr_date, 1)
 
     # no commit here: caller should commit once for batch operations
 
