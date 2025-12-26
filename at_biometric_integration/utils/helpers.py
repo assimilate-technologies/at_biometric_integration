@@ -194,9 +194,9 @@ def determine_attendance_status(working_hours, leave_status, is_holiday_flag, mi
     if working_hours >= float(min_h):
         return "Present"
         
-    # Priority 2: Holiday (No record if no work)
+    # Priority 2: Holiday
     if is_holiday_flag:
-        return None
+        return "Holiday"
         
     # Priority 3: Leave
     if leave_status and leave_status[0]:

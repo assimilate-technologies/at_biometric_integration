@@ -520,20 +520,20 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             "docstatus": 0
         })
 
-        if status is None:
-            # If it's a holiday/no reason for attendance, remove any DRAFT record if work wasn't performed
-            if existing_name:
-                frappe.delete_doc("Attendance", existing_name, ignore_permissions=True)
-            curr_date = add_days(curr_date, 1)
-            continue
-
         if existing_name:
             # Update only if not submitted
             doc = frappe.get_doc("Attendance", existing_name)
             doc.in_time = first_time
             doc.out_time = last_time
             doc.working_hours = hours
-            doc.status = status
+            
+            # BYPASS: controller prevents "Holiday" status
+            actual_status = status
+            if status == "Holiday":
+                doc.status = "Absent"
+            else:
+                doc.status = status
+                
             doc.shift = shift
             
             # Link leave if applicable
@@ -547,11 +547,15 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             doc.flags.ignore_permissions = True
             doc.save()
             
+            if actual_status == "Holiday":
+                doc.db_set("status", "Holiday")
+            
             if created_list is not None:
                 created_list.append(existing_name)
         else:
             # Check if submitted record exists; if so, skip to avoid duplicates
             if not frappe.db.exists("Attendance", {"employee": employee, "attendance_date": curr_date, "docstatus": 1}):
+                actual_status = status
                 doc_args = {
                     "doctype": "Attendance",
                     "employee": employee,
@@ -560,7 +564,7 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                     "in_time": first_time,
                     "out_time": last_time,
                     "working_hours": hours,
-                    "status": status,
+                    "status": "Absent" if status == "Holiday" else status,
                     "company": frappe.db.get_value("Employee", employee, "company")
                 }
                 if leave_status and leave_status[0]:
@@ -570,6 +574,10 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                 doc = frappe.get_doc(doc_args)
                 doc.flags.ignore_permissions = True
                 doc.insert()
+                
+                if actual_status == "Holiday":
+                    doc.db_set("status", "Holiday")
+
                 if created_list is not None:
                     created_list.append(doc.name)
         
