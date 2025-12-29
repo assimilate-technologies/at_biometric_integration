@@ -1,5 +1,6 @@
 # at_biometric_integration/utils/helpers.py
 import frappe
+from datetime import timedelta
 from frappe.utils import (
     get_datetime,
     now_datetime,
@@ -56,6 +57,62 @@ def is_holiday(employee, date):
     except Exception as e:
         log_error(e, "is_holiday")
         return False
+
+def is_weekend(date):
+    """Check if date is Saturday (5) or Sunday (6)"""
+    return date.weekday() >= 5
+
+def is_working_day(employee, date):
+    """Check if date is a working day (not holiday and not weekend)"""
+    return not is_holiday(employee, date) and not is_weekend(date)
+
+def get_last_checkout_from_previous_days(employee, current_date, max_lookback_days=7):
+    """
+    Find the last checkout from previous working days.
+    Looks back up to max_lookback_days to find the most recent checkout.
+    Skips holidays and weekends.
+    Returns: dict with 'time' key or None
+    """
+    check_date = getdate(current_date) - timedelta(days=1)
+    end_date = getdate(current_date) - timedelta(days=max_lookback_days)
+    
+    while check_date >= end_date:
+        # Skip if it's a holiday or weekend
+        if is_holiday(employee, check_date) or is_weekend(check_date):
+            check_date = check_date - timedelta(days=1)
+            continue
+        
+        # Look for checkouts on this date - get all checkins first
+        all_checkins = frappe.get_all(
+            "Employee Checkin",
+            filters={
+                "employee": employee,
+                "time": ["between", [f"{check_date} 00:00:00", f"{check_date} 23:59:59"]]
+            },
+            fields=["name", "time", "log_type"],
+            order_by="time desc"
+        )
+        
+        if all_checkins:
+            # Look for OUT type checkins first
+            out_checkins = [c for c in all_checkins if (c.get("log_type") or "").upper() == "OUT"]
+            if out_checkins:
+                return out_checkins[0]  # Return the last OUT checkout
+            
+            # If no OUT found, check if last checkin is not IN (treat as checkout)
+            last_checkin = all_checkins[0]
+            log_type = (last_checkin.get("log_type") or "").upper()
+            if log_type != "IN":
+                return last_checkin
+            
+            # If last checkin is IN, but there are multiple checkins, 
+            # the second-to-last might be a checkout
+            if len(all_checkins) > 1:
+                return all_checkins[1]  # Return second-to-last as potential checkout
+        
+        check_date = check_date - timedelta(days=1)
+    
+    return None
 
 def get_leave_status(employee, date):
     """
