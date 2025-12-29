@@ -189,14 +189,20 @@ def calculate_working_hours(first_checkin, last_checkin):
 def determine_attendance_status(working_hours, leave_status, is_holiday_flag, min_hours=None):
     settings = get_attendance_settings()
     min_h = min_hours if min_hours is not None else settings.min_working_hours
-    if is_holiday_flag:
-        return "Holiday"
-    if leave_status and leave_status[0] == "On Leave":
-        return "On Leave"
-    if leave_status and leave_status[0] == "Half Day":
-        return "Half Day"
+    
+    # Priority 1: Actual Work
     if working_hours >= float(min_h):
         return "Present"
+        
+    # Priority 2: Holiday
+    if is_holiday_flag:
+        return "Holiday"
+        
+    # Priority 3: Leave
+    if leave_status and leave_status[0]:
+        return leave_status[0] # "On Leave" or "Half Day"
+        
+    # Priority 4: Short work or Absent
     return "Half Day" if working_hours > 0 else "Absent"
 
 # ------------------------------------------------
