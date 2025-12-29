@@ -420,11 +420,11 @@ def process_attendance_realtime(from_date=None, to_date=None):
     """
     Recreates the attendance records from Employee Checkin table per employee per date.
     Supports date ranges and ensures all active employees have records.
+    Also dynamically re-processes all existing DRAFT attendance records.
     """
     from frappe.utils import getdate, add_days
     
     # If dates not provided, look at last 2 days by default to be safe
-    # but for a "fix" run, we might want more.
     if not to_date:
         to_date = getdate()
     if not from_date:
@@ -433,14 +433,33 @@ def process_attendance_realtime(from_date=None, to_date=None):
     from_date = getdate(from_date)
     to_date = getdate(to_date)
 
-    employees = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "default_shift"])
     created_or_updated = []
 
+    # 1. Process for the specific date range (Active Employees)
+    employees = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "default_shift"])
     for emp in employees:
         try:
             process_employee_attendance_realtime(emp.name, emp.default_shift or "", created_or_updated, from_date, to_date)
         except Exception as e:
             frappe.log_error(f"{emp.name} attendance error: {e}", "Realtime Attendance Error")
+
+    # 2. Dynamically re-process all existing DRAFT attendance records (even if older)
+    draft_attendances = frappe.get_all("Attendance", filters={"docstatus": 0}, fields=["employee", "attendance_date", "shift"])
+    for att in draft_attendances:
+        try:
+            # Skip if already processed in step 1 (to avoid redundant DB hits)
+            if from_date <= getdate(att.attendance_date) <= to_date:
+                continue
+                
+            process_employee_attendance_realtime(
+                att.employee, 
+                att.shift or "", 
+                created_or_updated, 
+                att.attendance_date, 
+                att.attendance_date
+            )
+        except Exception as e:
+            frappe.log_error(f"Draft re-process error: {att.employee} on {att.attendance_date}: {e}", "Draft Re-process Error")
 
     frappe.db.commit()
     return created_or_updated
@@ -453,6 +472,9 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         # Fallback if range not provided
         to_date = getdate()
         from_date = to_date
+    
+    from_date = getdate(from_date)
+    to_date = getdate(to_date)
 
     # Fetch all checkins for the range at once
     checkins = frappe.get_all(
@@ -468,7 +490,7 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
 
     by_date = {}
     for c in checkins:
-        d = get_datetime(c.time).date()
+        d = get_datetime(c.get('time')).date()
         by_date.setdefault(d, []).append(c)
 
     # Iterate through every single day in the range
@@ -482,8 +504,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         
         if daily:
             first, last = daily[0], daily[-1]
-            first_time = first.time
-            last_time = last.time
+            first_time = first.get('time')
+            last_time = last.get('time')
             hours = calculate_working_hours(first_time, last_time)
 
         leave_status = get_leave_status(employee, curr_date)
@@ -500,19 +522,41 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
 
         if existing_name:
             # Update only if not submitted
-            frappe.db.set_value("Attendance", existing_name, {
-                "in_time": first_time,
-                "out_time": last_time,
-                "working_hours": hours,
-                "status": status,
-                "shift": shift
-            })
+            doc = frappe.get_doc("Attendance", existing_name)
+            doc.in_time = first_time
+            doc.out_time = last_time
+            doc.working_hours = hours
+            
+            # BYPASS: controller prevents "Holiday" status
+            actual_status = status
+            if status == "Holiday":
+                doc.status = "Absent"
+            else:
+                doc.status = status
+                
+            doc.shift = shift
+            
+            # Link leave if applicable
+            if leave_status and leave_status[0]:
+                doc.leave_type = leave_status[1]
+                doc.leave_application = leave_status[2]
+            else:
+                doc.leave_type = None
+                doc.leave_application = None
+
+            doc.flags.ignore_permissions = True
+            doc.save()
+            
+            if actual_status == "Holiday":
+                doc.db_set("status", "Holiday")
+            
             if created_list is not None:
                 created_list.append(existing_name)
         else:
             # Check if submitted record exists; if so, skip to avoid duplicates
             if not frappe.db.exists("Attendance", {"employee": employee, "attendance_date": curr_date, "docstatus": 1}):
-                doc = frappe.get_doc({
+                actual_status = status
+                doc_args = {
                     "doctype": "Attendance",
                     "employee": employee,
                     "attendance_date": curr_date,
@@ -520,10 +564,20 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                     "in_time": first_time,
                     "out_time": last_time,
                     "working_hours": hours,
-                    "status": status,
+                    "status": "Absent" if status == "Holiday" else status,
                     "company": frappe.db.get_value("Employee", employee, "company")
-                })
-                doc.insert(ignore_permissions=True)
+                }
+                if leave_status and leave_status[0]:
+                    doc_args["leave_type"] = leave_status[1]
+                    doc_args["leave_application"] = leave_status[2]
+
+                doc = frappe.get_doc(doc_args)
+                doc.flags.ignore_permissions = True
+                doc.insert()
+                
+                if actual_status == "Holiday":
+                    doc.db_set("status", "Holiday")
+
                 if created_list is not None:
                     created_list.append(doc.name)
         
