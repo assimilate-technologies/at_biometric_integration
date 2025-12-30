@@ -503,10 +503,39 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         last_time = None
         
         if daily:
-            first, last = daily[0], daily[-1]
-            first_time = first.get('time')
-            last_time = last.get('time')
-            hours = calculate_working_hours(first_time, last_time)
+            # Find FIRST IN punch and LAST OUT punch (matching get_checkin_times_dynamic logic)
+            in_punches = []
+            out_punches = []
+            all_punches = []
+            
+            for checkin in daily:
+                log_type = (checkin.get('log_type') or '').strip().upper()
+                checkin_time = checkin.get('time')
+                
+                # Ensure we have a datetime object for comparison
+                if checkin_time:
+                    checkin_dt = get_datetime(checkin_time)
+                    all_punches.append(checkin_dt)
+                    
+                    if log_type == "IN":
+                        in_punches.append(checkin_dt)
+                    elif log_type == "OUT":
+                        out_punches.append(checkin_dt)
+            
+            # Use FIRST IN punch if available, otherwise use earliest punch
+            if in_punches:
+                first_time = min(in_punches)  # First IN punch
+            elif all_punches:
+                first_time = min(all_punches)  # Fallback to earliest
+            
+            # Use LAST OUT punch if available, otherwise use latest punch
+            if out_punches:
+                last_time = max(out_punches)  # Last OUT punch
+            elif all_punches:
+                last_time = max(all_punches)  # Fallback to latest
+            
+            if first_time and last_time:
+                hours = calculate_working_hours(first_time, last_time)
 
         leave_status = get_leave_status(employee, curr_date)
         holiday_flag = is_holiday(employee, curr_date)
@@ -514,15 +543,22 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         # determine_attendance_status handles 0 hours as Absent unless holiday/leave
         status = determine_attendance_status(hours, leave_status, holiday_flag)
 
-        existing_name = frappe.db.exists("Attendance", {
+        # Check for existing attendance (both draft and submitted)
+        existing_draft = frappe.db.exists("Attendance", {
             "employee": employee, 
             "attendance_date": curr_date,
             "docstatus": 0
         })
+        
+        existing_submitted = frappe.db.exists("Attendance", {
+            "employee": employee, 
+            "attendance_date": curr_date,
+            "docstatus": 1
+        })
 
-        if existing_name:
-            # Update only if not submitted
-            doc = frappe.get_doc("Attendance", existing_name)
+        if existing_draft:
+            # Update draft attendance
+            doc = frappe.get_doc("Attendance", existing_draft)
             doc.in_time = first_time
             doc.out_time = last_time
             doc.working_hours = hours
@@ -551,10 +587,26 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                 doc.db_set("status", "Holiday")
             
             if created_list is not None:
-                created_list.append(existing_name)
+                created_list.append(existing_draft)
+        elif existing_submitted:
+            # Update submitted attendance - use db_set to update fields directly
+            # This ensures we update the out_time even if attendance is submitted
+            update_fields = {}
+            if first_time:
+                update_fields["in_time"] = first_time
+            if last_time:
+                update_fields["out_time"] = last_time
+            if hours is not None:
+                update_fields["working_hours"] = hours
+            
+            if update_fields:
+                frappe.db.set_value("Attendance", existing_submitted, update_fields, update_modified=False)
+            
+            if created_list is not None:
+                created_list.append(existing_submitted)
         else:
-            # Check if submitted record exists; if so, skip to avoid duplicates
-            if not frappe.db.exists("Attendance", {"employee": employee, "attendance_date": curr_date, "docstatus": 1}):
+            # Create new attendance record
+            if not existing_submitted:
                 actual_status = status
                 doc_args = {
                     "doctype": "Attendance",
