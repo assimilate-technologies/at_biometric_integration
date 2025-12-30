@@ -77,49 +77,10 @@ def fetch_and_upload_attendance():
 
 
 @frappe.whitelist()
-def mark_attendance(from_date=None, to_date=None):
-    """
-    Dynamically process attendance for all dates with checkins.
-    If dates provided, processes that specific range.
-    If no dates provided, automatically finds and processes ALL dates with checkins.
-    This ensures no dates are missed, including dates like Dec 26th after holidays.
-    """
-    from frappe.utils import getdate
-    
-    if from_date:
-        from_date = getdate(from_date)
-    if to_date:
-        to_date = getdate(to_date)
-    
-    processed = attendance_processing.process_attendance_realtime(from_date, to_date)
-    return {
-        "message": "Marked attendance (realtime)",
-        "processed_count": len(processed) if processed else 0,
-        "processed": processed
-    }
-
-
-@frappe.whitelist()
-def backfill_all_attendance():
-    """
-    Comprehensive backfill function to create attendance for ALL past dates with checkins.
-    This ensures no dates are missed, even if they were skipped in previous runs.
-    Use this to fix missing attendance records in both local and production.
-    """
-    try:
-        processed = attendance_processing.backfill_all_missing_attendance()
-        return {
-            "message": "Backfill completed successfully",
-            "processed_count": len(processed) if processed else 0,
-            "processed": processed[:100] if len(processed) > 100 else processed  # Limit response size
-        }
-    except Exception as e:
-        frappe.log_error(str(e), "Backfill Attendance API Error")
-        return {
-            "message": f"Backfill error: {str(e)}",
-            "processed_count": 0,
-            "error": str(e)
-        }
+def mark_attendance():
+    """Backward-compatible endpoint"""
+    attendance_processing.process_attendance_realtime()
+    return {"message": "Marked attendance (realtime)"}
 
 
 @frappe.whitelist()
