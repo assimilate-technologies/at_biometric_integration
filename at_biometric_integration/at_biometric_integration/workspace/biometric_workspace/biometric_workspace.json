@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\":\"title-block\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Biometric Workspace</span>\",\"col\":12}},{\"id\":\"daily-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Daily Attendance Report\",\"col\":4}},{\"id\":\"weekly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Weekly Attendance Report\",\"col\":4}},{\"id\":\"XACquFIK57\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Report\",\"col\":4}},{\"id\":\"cKiR2-jfVQ\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Attendance Regularization Request\",\"col\":4}},{\"id\":\"monthly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Summary Report\",\"col\":3}},{\"id\":\"8-K9k9cZ_B\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"iGjqTDE5jd\",\"type\":\"card\",\"data\":{\"card_name\":\"Master\",\"col\":4}},{\"id\":\"mmgIlPPpny\",\"type\":\"card\",\"data\":{\"card_name\":\"Settings\",\"col\":4}}]",
+ "content": "[{\"id\":\"title-block\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Biometric Workspace</span>\",\"col\":12}},{\"id\":\"daily-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Daily Attendance Report\",\"col\":4}},{\"id\":\"weekly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Weekly Attendance Report\",\"col\":4}},{\"id\":\"XACquFIK57\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Report\",\"col\":4}},{\"id\":\"cKiR2-jfVQ\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Attendance Regularization Request\",\"col\":4}},{\"id\":\"monthly-report\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Summary Report\",\"col\":4}},{\"id\":\"g83bCo3Gq_\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Monthly Attendance Group Report\",\"col\":3}},{\"id\":\"8-K9k9cZ_B\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"iGjqTDE5jd\",\"type\":\"card\",\"data\":{\"card_name\":\"Master\",\"col\":4}},{\"id\":\"mmgIlPPpny\",\"type\":\"card\",\"data\":{\"card_name\":\"Settings\",\"col\":4}}]",
  "creation": "2025-10-31 13:37:13.134452",
  "custom_blocks": [],
  "docstatus": 0,
@@ -62,8 +62,8 @@
    "type": "Link"
   }
  ],
- "modified": "2025-11-27 15:13:39.715632",
- "modified_by": "Administrator",
+ "modified": "2025-12-30 17:02:12.299142",
+ "modified_by": "connect@assimilatetechnologies.com",
  "module": "At Biometric Integration",
  "name": "Biometric Workspace",
  "number_cards": [],
@@ -73,28 +73,7 @@
  "quick_lists": [],
  "roles": [
   {
-   "role": "System Manager"
-  },
-  {
-   "role": "HR User"
-  },
-  {
-   "role": "HR Manager"
-  },
-  {
-   "role": "Employee"
-  },
-  {
-   "role": "Employee Self Service"
-  },
-  {
-   "role": "Project Manager"
-  },
-  {
-   "role": "Project User"
-  },
-  {
-   "role": "Workspace Manager"
+   "role": "All"
   }
  ],
  "sequence_id": 0.0,
@@ -108,11 +87,10 @@
   },
   {
    "color": "Grey",
-   "doc_view": "",
-   "label": "Attendance Regularization Request",
-   "link_to": "",
+   "doc_view": "List",
+   "label": "Monthly Attendance Group Report",
    "type": "URL",
-   "url": "/app/query-report/Attendance%20Regularization%20Request"
+   "url": "/app/report/Monthly%20Attendance"
   },
   {
    "color": "Grey",
@@ -120,6 +98,14 @@
    "label": "Monthly Attendance Report",
    "type": "URL",
    "url": "/app/query-report/Attendance%20Report%20Summary?period=Monthly"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "",
+   "label": "Attendance Regularization Request",
+   "link_to": "",
+   "type": "URL",
+   "url": "/app/query-report/Attendance%20Regularization%20Request"
   },
   {
    "color": "Blue",
