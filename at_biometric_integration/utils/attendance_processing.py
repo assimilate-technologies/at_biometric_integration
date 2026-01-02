@@ -464,15 +464,16 @@ def process_attendance_realtime(from_date=None, to_date=None):
             frappe.log_error(f"Draft re-process error: {att.employee} on {att.attendance_date}: {e}", "Draft Re-process Error")
 
     # 3. HEAL GAPS: Find dates where an active employee is missing an attendance record
-    # This covers "all employees" for "all past dates", ensuring no one is missing from the list.
-    # We look at all dates where ANY activity (check-in or attendance) exists in the system.
+    # Optimized: Only look back 60 days for dynamic recreation to keep sync fast.
     missing_records = frappe.db.sql("""
         SELECT e.name as employee, d.attendance_date
         FROM (SELECT name FROM `tabEmployee` WHERE status='Active') e
         CROSS JOIN (
-            SELECT DISTINCT attendance_date FROM `tabAttendance`
+            SELECT DISTINCT attendance_date FROM `tabAttendance` 
+            WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
             UNION
             SELECT DISTINCT DATE(time) FROM `tabEmployee Checkin`
+            WHERE time >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
         ) d
         LEFT JOIN `tabAttendance` a ON a.employee = e.name AND a.attendance_date = d.attendance_date
         WHERE a.name IS NULL
