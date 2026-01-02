@@ -12,9 +12,14 @@ def run_fix():
     print(f"DEBUG: Found {emp_count} Active Employees, {chk_count} Checkins, {att_count} Attendance records.")
 
     # 1. Recalculate Attendance (First-In Last-Out)
-    # Defaulting to last 30 days for a thorough fix
+    # Automatically find the earliest check-in to cover "all past days"
     to_date = getdate()
-    from_date = add_days(to_date, -30)
+    earliest_checkin = frappe.db.sql("SELECT MIN(time) FROM `tabEmployee Checkin`")[0][0]
+    
+    if earliest_checkin:
+        from_date = getdate(earliest_checkin)
+    else:
+        from_date = add_days(to_date, -30)
     
     print(f"Recalculating attendance for all active employees from {from_date} to {to_date}...")
     try:

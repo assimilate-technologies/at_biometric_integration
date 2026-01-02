@@ -87,10 +87,22 @@ def execute(filters=None):
     # --------------------------
     # Employees
     # --------------------------
-    employees = frappe.get_all(
-        "Employee",
-        fields=["name", "employee_name"]
-    )
+    user_roles = frappe.get_roles()
+    employee_filter = filters.get("employee")
+
+    if not ("System Manager" in user_roles or "HR Manager" in user_roles or "HR User" in user_roles):
+        employee_name = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
+        if employee_name:
+            employees = [frappe._dict({"name": employee_name, "employee_name": frappe.db.get_value("Employee", employee_name, "employee_name")})]
+        else:
+            return [], []
+    elif employee_filter:
+        employees = [frappe._dict({"name": employee_filter, "employee_name": frappe.db.get_value("Employee", employee_filter, "employee_name")})]
+    else:
+        employees = frappe.get_all(
+            "Employee",
+            fields=["name", "employee_name"]
+        )
 
     data = []
 

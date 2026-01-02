@@ -13,11 +13,9 @@ from frappe.utils import (
 # ------------------------------------------------
 # Logging helper
 # ------------------------------------------------
-def log_error(msg, title="Biometric Integration Error"):
-    try:
-        frappe.log_error(str(msg), title)
-    except Exception:
-        frappe.logger().error(f"{title}: {msg}")
+def log_error(message, title="Biometric Error"):
+    frappe.log_error(message, title)
+
 
 # ------------------------------------------------
 # Attendance Settings (central)
