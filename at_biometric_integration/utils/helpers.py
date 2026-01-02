@@ -241,12 +241,20 @@ def calculate_working_hours(first_checkin, last_checkin):
 # ------------------------------------------------
 # Status determination (Option B)
 # ------------------------------------------------
-def determine_attendance_status(working_hours, leave_status, is_holiday_flag, min_hours=None):
+def determine_attendance_status(working_hours, leave_status, is_holiday_flag, attendance_date=None, min_hours=None):
+    """
+    Priority:
+    1. Present (if working_hours >= min_hours)
+    2. Holiday (if is_holiday_flag)
+    3. Leave (if active leave application)
+    4. Weekly Off (if it's a weekend and no work)
+    5. Half Day / Absent (if work done but < min_hours, or no work)
+    """
     settings = get_attendance_settings()
     min_h = min_hours if min_hours is not None else settings.min_working_hours
     
     # Priority 1: Actual Work
-    if working_hours >= float(min_h):
+    if float(working_hours or 0) >= float(min_h):
         return "Present"
         
     # Priority 2: Holiday
@@ -256,9 +264,17 @@ def determine_attendance_status(working_hours, leave_status, is_holiday_flag, mi
     # Priority 3: Leave
     if leave_status and leave_status[0]:
         return leave_status[0] # "On Leave" or "Half Day"
+
+    # Priority 4: Weekly Off
+    if attendance_date:
+        if is_weekend(getdate(attendance_date)):
+            # If they worked some hours but not enough for Present, maybe keep it as Weekly Off or Half Day?
+           
+            if float(working_hours or 0) == 0:
+                return "Weekly Off"
         
-    # Priority 4: Short work or Absent
-    return "Half Day" if working_hours > 0 else "Absent"
+    # Priority 5: Short work or Absent
+    return "Half Day" if float(working_hours or 0) > 0 else "Absent"
 
 # ------------------------------------------------
 # Auto-submit eligibility (central)

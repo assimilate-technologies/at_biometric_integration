@@ -574,8 +574,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         leave_status = get_leave_status(employee, curr_date)
         holiday_flag = is_holiday(employee, curr_date)
         
-        # determine_attendance_status handles 0 hours as Absent unless holiday/leave
-        status = determine_attendance_status(hours, leave_status, holiday_flag)
+        # determine_attendance_status handles 0 hours as Absent unless holiday/leave/weekend
+        status = determine_attendance_status(hours, leave_status, holiday_flag, curr_date)
 
         # Check for existing attendance (both draft and submitted)
         existing_draft = frappe.db.exists("Attendance", {
@@ -597,9 +597,9 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             doc.out_time = last_time
             doc.working_hours = hours
             
-            # BYPASS: controller prevents "Holiday" status
+            # BYPASS: controller might prevent "Holiday" or "Weekly Off" status during .save()
             actual_status = status
-            if status == "Holiday":
+            if status in ("Holiday", "Weekly Off"):
                 doc.status = "Absent"
             else:
                 doc.status = status
@@ -617,8 +617,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             doc.flags.ignore_permissions = True
             doc.save()
             
-            if actual_status == "Holiday":
-                doc.db_set("status", "Holiday")
+            if actual_status in ("Holiday", "Weekly Off"):
+                doc.db_set("status", actual_status)
             
             if created_list is not None:
                 created_list.append(existing_draft)
@@ -633,19 +633,19 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                 update_fields["working_hours"] = hours
             
             # Re-evaluate status for submitted docs (e.g. from Absent -> Present)
-            new_status = determine_attendance_status(hours, leave_status, holiday_flag)
+            new_status = determine_attendance_status(hours, leave_status, holiday_flag, curr_date)
             
-            # Controller prevents status 'Holiday' directly in doc.status
-            if new_status == "Holiday":
+            # Controller prevents status 'Holiday' or 'Weekly Off' directly in doc.status
+            if new_status in ("Holiday", "Weekly Off"):
                 update_fields["status"] = "Absent"
             else:
                 update_fields["status"] = new_status
 
             if update_fields:
                 frappe.db.set_value("Attendance", existing_submitted, update_fields, update_modified=False)
-                # If it was a holiday, force set it via db_set specifically
-                if new_status == "Holiday":
-                    frappe.db.set_value("Attendance", existing_submitted, "status", "Holiday", update_modified=False)
+                # If it was a holiday/weekend, force set it via db_set specifically
+                if new_status in ("Holiday", "Weekly Off"):
+                    frappe.db.set_value("Attendance", existing_submitted, "status", new_status, update_modified=False)
             
             if created_list is not None:
                 created_list.append(existing_submitted)
@@ -661,7 +661,7 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                     "in_time": first_time,
                     "out_time": last_time,
                     "working_hours": hours,
-                    "status": "Absent" if status == "Holiday" else status,
+                    "status": "Absent" if status in ("Holiday", "Weekly Off") else status,
                     "company": frappe.db.get_value("Employee", employee, "company")
                 }
                 if leave_status and leave_status[0]:
@@ -672,8 +672,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                 doc.flags.ignore_permissions = True
                 doc.insert()
                 
-                if actual_status == "Holiday":
-                    doc.db_set("status", "Holiday")
+                if actual_status in ("Holiday", "Weekly Off"):
+                    doc.db_set("status", actual_status)
 
                 if created_list is not None:
                     created_list.append(doc.name)
