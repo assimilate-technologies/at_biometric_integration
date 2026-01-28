@@ -73,28 +73,7 @@
  "quick_lists": [],
  "roles": [
   {
-   "role": "System Manager"
-  },
-  {
-   "role": "HR User"
-  },
-  {
-   "role": "HR Manager"
-  },
-  {
-   "role": "Employee"
-  },
-  {
-   "role": "Employee Self Service"
-  },
-  {
-   "role": "Project Manager"
-  },
-  {
-   "role": "Project User"
-  },
-  {
-   "role": "Workspace Manager"
+   "role": "All"
   }
  ],
  "sequence_id": 0.0,
@@ -119,7 +98,7 @@
    "label": "Attendance Regularization Request",
    "link_to": "",
    "type": "URL",
-   "url": "/app/query-report/Attendance%20Regularization%20Request"
+   "url": "/app/report/Monthly%20Attendance"
   },
   {
    "color": "Grey",
@@ -127,6 +106,14 @@
    "label": "Monthly Attendance Report",
    "type": "URL",
    "url": "/app/query-report/Attendance%20Report%20Summary?period=Monthly"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "",
+   "label": "Attendance Regularization Request",
+   "link_to": "",
+   "type": "URL",
+   "url": "/app/query-report/Attendance%20Regularization%20Request"
   },
   {
    "color": "Blue",
