@@ -61,38 +61,75 @@ def fetch_attendance_from_device(ip, port=4370, timeout=10):
     return []
 
 def process_attendance_logs(ip, logs):
+    """
+    Redirect to the more robust all-dates processor to ensure logs
+    are saved to the correct daily JSON files.
+    """
+    return process_attendance_logs_all_dates(ip, logs)
+
+def sync_all_historical_data(ip, port=4370):
+    """
+    Force fetch all data from device and process into standard daily files.
+    This is useful for recovering missing data.
+    """
+    logs = fetch_attendance_from_device(ip, port)
+    if not logs:
+        return []
+    return process_attendance_logs_all_dates(ip, logs)
+
+def process_attendance_logs_all_dates(ip, logs):
+    """
+    Process logs into their respective dates, NOT just today's file.
+    """
     if not logs:
         return []
 
-    existing = load_attendance_data(ip)
-    existing_keys = {
-        (str(r.get("user_id")), str(r.get("timestamp")))
-        for r in existing if isinstance(r, dict)
-    }
-
-    new_records = []
-
+    processed_count = 0
+    by_date = {}
     for log in logs:
-        ts = get_datetime(log.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        key = (str(log.user_id), ts)
+        ts_dt = get_datetime(log.timestamp)
+        date_str = ts_dt.strftime("%Y-%m-%d")
+        by_date.setdefault(date_str, []).append(log)
 
-        if key in existing_keys:
-            continue
+    ensure_dir()
+    for date_str, daily_logs in by_date.items():
+        path = os.path.join(ATTENDANCE_DIR, f"attendance_{ip}_{date_str}.json")
+        existing = []
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    existing = json.load(f)
+            except:
+                existing = []
 
-        rec = {
-            "uid": getattr(log, "uid", None),
-            "user_id": str(log.user_id),
-            "timestamp": ts,
-            "punch": getattr(log, "punch", None),
-            "punch_type": PUNCH_MAPPING.get(log.punch, "Unknown"),
-            "device_ip": ip,
+        existing_keys = {
+            (str(r.get("user_id")), str(r.get("timestamp")))
+            for r in existing if isinstance(r, dict)
         }
 
-        existing.append(rec)
-        existing_keys.add(key)
-        new_records.append(rec)
+        new_for_day = []
+        for log in daily_logs:
+            ts = get_datetime(log.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+            key = (str(log.user_id), ts)
 
-    if new_records:
-        save_attendance_data(ip, existing)
+            if key in existing_keys:
+                continue
 
-    return new_records
+            rec = {
+                "uid": getattr(log, "uid", None),
+                "user_id": str(log.user_id),
+                "timestamp": ts,
+                "punch": getattr(log, "punch", None),
+                "punch_type": PUNCH_MAPPING.get(log.punch, "Unknown"),
+                "device_ip": ip,
+            }
+            existing.append(rec)
+            existing_keys.add(key)
+            new_for_day.append(rec)
+            processed_count += 1
+
+        if new_for_day:
+            with open(path, "w") as f:
+                json.dump(existing, f, default=str, indent=2)
+
+    return processed_count

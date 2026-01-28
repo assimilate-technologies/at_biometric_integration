@@ -436,6 +436,7 @@ def process_attendance_realtime(from_date=None, to_date=None):
     created_or_updated = []
 
     # 1. Process for the specific date range (Active Employees)
+    # This ensures attendance is updated regularly for recent dates
     employees = frappe.get_all("Employee", filters={"status": "Active"}, fields=["name", "default_shift"])
     for emp in employees:
         try:
@@ -444,6 +445,7 @@ def process_attendance_realtime(from_date=None, to_date=None):
             frappe.log_error(f"{emp.name} attendance error: {e}", "Realtime Attendance Error")
 
     # 2. Dynamically re-process all existing DRAFT attendance records (even if older)
+    # Ensures that if checkins were added late to an old date, the draft record updates
     draft_attendances = frappe.get_all("Attendance", filters={"docstatus": 0}, fields=["employee", "attendance_date", "shift"])
     for att in draft_attendances:
         try:
@@ -460,6 +462,39 @@ def process_attendance_realtime(from_date=None, to_date=None):
             )
         except Exception as e:
             frappe.log_error(f"Draft re-process error: {att.employee} on {att.attendance_date}: {e}", "Draft Re-process Error")
+
+    # 3. HEAL GAPS: Find dates where an active employee is missing an attendance record
+    # Optimized: Only look back 60 days for dynamic recreation to keep sync fast.
+    missing_records = frappe.db.sql("""
+        SELECT e.name as employee, d.attendance_date
+        FROM (SELECT name FROM `tabEmployee` WHERE status='Active') e
+        CROSS JOIN (
+            SELECT DISTINCT attendance_date FROM `tabAttendance` 
+            WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+            UNION
+            SELECT DISTINCT DATE(time) FROM `tabEmployee Checkin`
+            WHERE time >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+        ) d
+        LEFT JOIN `tabAttendance` a ON a.employee = e.name AND a.attendance_date = d.attendance_date
+        WHERE a.name IS NULL
+        ORDER BY d.attendance_date DESC
+    """, as_dict=True)
+    
+    if missing_records:
+        # Limit processing in one go to prevent timeout if the gap is massive, 
+        # but 5000+ per run is usually safe for small/medium teams
+        for row in missing_records[:10000]: 
+            try:
+                emp_shift = frappe.db.get_value("Employee", row.employee, "default_shift")
+                process_employee_attendance_realtime(
+                    row.employee, 
+                    emp_shift or "", 
+                    created_or_updated, 
+                    row.attendance_date, 
+                    row.attendance_date
+                )
+            except Exception as e:
+                frappe.log_error(f"Gap heal error: {row.employee} on {row.attendance_date}: {e}")
 
     frappe.db.commit()
     return created_or_updated
@@ -540,8 +575,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         leave_status = get_leave_status(employee, curr_date)
         holiday_flag = is_holiday(employee, curr_date)
         
-        # determine_attendance_status handles 0 hours as Absent unless holiday/leave
-        status = determine_attendance_status(hours, leave_status, holiday_flag)
+        # determine_attendance_status handles 0 hours as Absent unless holiday/leave/weekend
+        status = determine_attendance_status(hours, leave_status, holiday_flag, curr_date)
 
         # Check for existing attendance (both draft and submitted)
         existing_draft = frappe.db.exists("Attendance", {
@@ -563,9 +598,9 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             doc.out_time = last_time
             doc.working_hours = hours
             
-            # BYPASS: controller prevents "Holiday" status
+            # BYPASS: controller might prevent "Holiday" or "Weekly Off" status during .save()
             actual_status = status
-            if status == "Holiday":
+            if status in ("Holiday", "Weekly Off"):
                 doc.status = "Absent"
             else:
                 doc.status = status
@@ -583,14 +618,13 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             doc.flags.ignore_permissions = True
             doc.save()
             
-            if actual_status == "Holiday":
-                doc.db_set("status", "Holiday")
+            if actual_status in ("Holiday", "Weekly Off"):
+                doc.db_set("status", actual_status)
             
             if created_list is not None:
                 created_list.append(existing_draft)
         elif existing_submitted:
-            # Update submitted attendance - use db_set to update fields directly
-            # This ensures we update the out_time even if attendance is submitted
+            # Update submitted attendance - directly update DB to avoid validation/workflow blocks
             update_fields = {}
             if first_time:
                 update_fields["in_time"] = first_time
@@ -599,8 +633,20 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             if hours is not None:
                 update_fields["working_hours"] = hours
             
+            # Re-evaluate status for submitted docs (e.g. from Absent -> Present)
+            new_status = determine_attendance_status(hours, leave_status, holiday_flag, curr_date)
+            
+            # Controller prevents status 'Holiday' or 'Weekly Off' directly in doc.status
+            if new_status in ("Holiday", "Weekly Off"):
+                update_fields["status"] = "Absent"
+            else:
+                update_fields["status"] = new_status
+
             if update_fields:
                 frappe.db.set_value("Attendance", existing_submitted, update_fields, update_modified=False)
+                # If it was a holiday/weekend, force set it via db_set specifically
+                if new_status in ("Holiday", "Weekly Off"):
+                    frappe.db.set_value("Attendance", existing_submitted, "status", new_status, update_modified=False)
             
             if created_list is not None:
                 created_list.append(existing_submitted)
@@ -616,7 +662,7 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                     "in_time": first_time,
                     "out_time": last_time,
                     "working_hours": hours,
-                    "status": "Absent" if status == "Holiday" else status,
+                    "status": "Absent" if status in ("Holiday", "Weekly Off") else status,
                     "company": frappe.db.get_value("Employee", employee, "company")
                 }
                 if leave_status and leave_status[0]:
@@ -627,8 +673,8 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                 doc.flags.ignore_permissions = True
                 doc.insert()
                 
-                if actual_status == "Holiday":
-                    doc.db_set("status", "Holiday")
+                if actual_status in ("Holiday", "Weekly Off"):
+                    doc.db_set("status", actual_status)
 
                 if created_list is not None:
                     created_list.append(doc.name)

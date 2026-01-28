@@ -4,6 +4,30 @@ from .utils import biometric_sync, checkin_processing, attendance_processing, au
 from frappe import _
 
 @frappe.whitelist()
+
+# def app_checkin(employee, log_type, checkin_time=None):
+#     """
+#     App / Mobile Check-in or Check-out
+#     log_type: IN or OUT
+#     """
+#     if log_type not in ("IN", "OUT"):
+#         frappe.throw(_("Invalid log type"))
+
+#     doc = frappe.get_doc({
+#         "doctype": "Employee Checkin",
+#         "employee": employee,
+#         "time": checkin_time or now_datetime(),
+#         "log_type": log_type,
+#         "device_id": "Mobile App"
+#     })
+#     doc.insert(ignore_permissions=True)
+#     frappe.db.commit()
+
+#     return {
+#         "status": "success",
+#         "checkin": doc.name
+#     }
+
 def fetch_and_upload_attendance():
     response = {
         "processed": [],
@@ -115,11 +139,11 @@ def sync_all_biometric_data():
             
             response["processed"].append({
                 "device": ip,
-                "new_records": len(new_records),
+                "new_records": new_records,
                 "created_checkins": len(created) if created else 0
             })
         except Exception as e:
-            frappe.log_error(e, f"sync_all_biometric_data - {ip}")
+            frappe.log_error(str(e), f"sync_all_biometric_data - {ip}")
             response["errors"].append(f"{ip}: {str(e)}")
     
     return response

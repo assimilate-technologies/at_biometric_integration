@@ -264,7 +264,10 @@ scheduler_events = {
         ],
         "*/10 * * * *": [
             "at_biometric_integration.utils.attendance_processing.auto_submit_due_attendances"
-        ]
+        ],
+        # "*/10 * * * *": [
+        #     "at_biometric_integration.api.mark_attendance"
+        # ]
     },
     "hourly": [
         "at_biometric_integration.api.mark_attendance"

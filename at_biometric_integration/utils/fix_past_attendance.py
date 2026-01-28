@@ -12,9 +12,9 @@ def run_fix():
     print(f"DEBUG: Found {emp_count} Active Employees, {chk_count} Checkins, {att_count} Attendance records.")
 
     # 1. Recalculate Attendance (First-In Last-Out)
-    # Defaulting to last 30 days for a thorough fix
+    # Limited to 60 days to improve performance while covering recent history
     to_date = getdate()
-    from_date = add_days(to_date, -30)
+    from_date = add_days(to_date, -60)
     
     print(f"Recalculating attendance for all active employees from {from_date} to {to_date}...")
     try:
