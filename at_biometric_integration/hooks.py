@@ -6,6 +6,7 @@ app_email = "info@assimilatetechnologies.com"
 app_license = "mit"
 
 
+
 # Apps
 # -----------------------
 
