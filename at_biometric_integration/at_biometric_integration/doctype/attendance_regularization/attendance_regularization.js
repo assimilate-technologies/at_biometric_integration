@@ -13,7 +13,9 @@ frappe.ui.form.on("Attendance Regularization", {
             if (emp?.message?.name) frm.set_value("employee", emp.message.name);
         }
 
-        if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
+        // Note: handle_full_flow is intentionally NOT called here.
+        // `refresh` fires on every page load (right after onload) and also on
+        // every re-save, so running it here would execute the flow twice.
     },
 
     refresh: async function (frm) {
@@ -139,6 +141,21 @@ function reset_limit_flags(frm) {
 
 
 // -------------------- Fetch Check-in/Check-out --------------------
+// Sync a read-only, system-owned field without marking the form dirty.
+// `frm.set_value` triggers frm.dirty() (→ doc.__unsaved = 1 → "Not Saved"
+// indicator) whenever the value differs from the loaded one — including the
+// "" vs null mismatch, which shows "Not Saved" even though nothing changed.
+function sync_readonly(frm, fieldname, value) {
+    const current = frm.doc[fieldname] || "";
+    const next = value || "";
+
+    if (current === next) return; // identical → nothing to write
+
+    // 4th arg = skip_dirty_trigger: refreshes the control but does not set
+    // doc.__unsaved, so a saved Draft still shows its real status.
+    frm.set_value(fieldname, value || null, null, true);
+}
+
 async function fetch_system_checkin_times(frm) {
     if (!frm.doc.employee || !frm.doc.date) return;
 
@@ -157,8 +174,8 @@ async function fetch_system_checkin_times(frm) {
         });
 
         if (!logs.length) {
-            frm.set_value("system_in_time", null);
-            frm.set_value("system_out_time", null);
+            sync_readonly(frm, "system_in_time", null);
+            sync_readonly(frm, "system_out_time", null);
             return;
         }
 
@@ -175,15 +192,17 @@ async function fetch_system_checkin_times(frm) {
         const in_val = extract(first);
         const out_val = extract(last);
 
-        frm.set_value("system_in_time", in_val);
-        frm.set_value("system_out_time", out_val);
+        sync_readonly(frm, "system_in_time", in_val);
+        sync_readonly(frm, "system_out_time", out_val);
 
+        // in_time / out_time are user-entered values: filling a missing one is
+        // a genuine change, so it must keep the normal dirty behaviour.
         if (in_val && !frm.doc.in_time) frm.set_value("in_time", in_val);
         if (out_val && !frm.doc.out_time) frm.set_value("out_time", out_val);
 
     } catch (err) {
         console.error("Checkin Fetch Error:", err);
-        frm.set_value("system_in_time", null);
-        frm.set_value("system_out_time", null);
+        sync_readonly(frm, "system_in_time", null);
+        sync_readonly(frm, "system_out_time", null);
     }
 }

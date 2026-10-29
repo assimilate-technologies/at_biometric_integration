@@ -7,17 +7,35 @@
   "is_standard": "Yes",
   "filters": [
     {
-      "fieldname": "period",
-      "label": "Period",
+      "fieldname": "year",
+      "label": "Year",
       "fieldtype": "Select",
-      "options": "Weekly\nMonthly",
-      "default": "Weekly"
+      "options": "\n2023\n2024\n2025\n2026\n2027",
+      "default": "2026"
     },
     {
       "fieldname": "employee",
       "label": "Employee",
       "fieldtype": "Link",
       "options": "Employee"
+    },
+    {
+      "fieldname": "period",
+      "label": "Period",
+      "fieldtype": "Select",
+      "options": "\nWeekly\nMonthly"
+    },
+    {
+      "fieldname": "month",
+      "label": "Month",
+      "fieldtype": "Select",
+      "options": "\nJanuary\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember"
+    },
+    {
+      "fieldname": "week",
+      "label": "Week",
+      "fieldtype": "Select",
+      "options": "\nWeek 1\nWeek 2\nWeek 3\nWeek 4\nWeek 5"
     },
     {
       "fieldname": "from_date",
@@ -28,18 +46,6 @@
       "fieldname": "to_date",
       "label": "To Date",
       "fieldtype": "Date"
-    },
-    {
-      "fieldname": "month",
-      "label": "Month",
-      "fieldtype": "Select",
-      "options": "\nJanuary\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember"
-    },
-    {
-      "fieldname": "year",
-      "label": "Year",
-      "fieldtype": "Select",
-      "options": "\n2023\n2024\n2025\n2026"
     }
   ]
 }
