@@ -87,6 +87,15 @@ frappe.query_reports["Attendance Regularization Request"] = {
             label: "To Date",
             fieldtype: "Date",
         },
+        {
+            fieldname: "status",
+            label: "Status",
+            fieldtype: "Select",
+            options: ["", "Present", "Absent", "On Leave", "Half Day", "Missed Punch"],
+            on_change: function () {
+                frappe.query_report.refresh();
+            },
+        },
     ],
 
     onload: function (report) {

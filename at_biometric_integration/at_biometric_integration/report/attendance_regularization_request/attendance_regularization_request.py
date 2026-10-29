@@ -268,7 +268,14 @@ def execute(filters=None):
 
     # Sort data by attendance_date to ensure chronological order
     data.sort(key=lambda x: x.get("attendance_date", date.min))
-    
+
+    # ---------------- Apply Status Filter ----------------
+    status_filter = filters.get("status")
+    if status_filter:
+        data = [row for row in data if row.get("status") == status_filter]
+        # Re-sort by status then attendance_date
+        data.sort(key=lambda x: (x.get("status") or "", x.get("attendance_date", date.min)))
+
     return columns, data
 
 # ---------------- Helper Functions ----------------
