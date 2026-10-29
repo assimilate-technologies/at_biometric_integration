@@ -26,9 +26,9 @@ frappe.query_reports["Attendance Regularization Request"] = {
             fieldname: "period",
             label: "Period",
             fieldtype: "Select",
-            // Blank by default — the user must pick Weekly / Monthly.
+            // No default — user can leave blank and use custom From/To dates,
+            // or pick Weekly/Monthly for auto date-ranges.
             options: ["", "Weekly", "Monthly"],
-            reqd: 1,
             on_change: function () {
                 updateFilterVisibility();
                 setDefaultDates();
@@ -90,11 +90,11 @@ frappe.query_reports["Attendance Regularization Request"] = {
     ],
 
     onload: function (report) {
-        // Period is blank on load → setDefaultDates() now defaults to
-        // today..today (single day) so From/To are pre-filled even before
-        // the user picks a Period. Frappe then runs report.refresh()
-        // immediately after onload (see query_report.js refresh_report()),
-        // which will show "Please set filters" until Period is chosen.
+        // Period is blank on load → setDefaultDates() pre-fills
+        // From/To with today..today. Since Period is NOT required,
+        // the report fetches immediately for that single day.
+        // User can then pick Period = Weekly/Monthly for auto-ranges,
+        // or manually edit From/To for a custom range.
         updateFilterVisibility();
         setDefaultDates();
         attachRegularizeButtonHandler();
