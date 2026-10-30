@@ -99,18 +99,18 @@ frappe.query_reports["Attendance Regularization Request"] = {
     ],
 
     onload: function (report) {
-        // Period is blank on load → setDefaultDates() pre-fills
-        // From/To with today..today. Since Period is NOT required,
-        // the report fetches immediately for that single day.
-        // User can then pick Period = Weekly/Monthly for auto-ranges,
-        // or manually edit From/To for a custom range.
+        // Period is blank on load → From/To are left empty so the
+        // report shows ALL data by default. User can pick Period =
+        // Weekly/Monthly for auto-ranges, or manually set From/To.
         updateFilterVisibility();
         setDefaultDates();
         attachRegularizeButtonHandler();
     },
 
     onrefresh: function (report) {
-        if (!frappe.query_report.get_filter_value("from_date") || !frappe.query_report.get_filter_value("to_date")) {
+        // Only re-derive dates when a Period is chosen; with no Period
+        // the From/To stay empty and the report shows all data.
+        if (frappe.query_report.get_filter_value("period")) {
             setDefaultDates();
         }
         setTimeout(() => attachRegularizeButtonHandler(), 300);
@@ -238,14 +238,19 @@ function getWeekRange(week_label) {
 
 function setDefaultDates() {
     const period = frappe.query_report.get_filter_value("period");
-    const today = frappe.datetime.get_today();
-    let from_date = today;
-    let to_date = today;
 
     if (!period) {
-        // Period blank → default to today..today (single day)
-        // From/To are visible and editable in this state.
-    } else if (period === "Weekly") {
+        // Period blank → no default date range.
+        // Clear From/To so the report fetches ALL data by default.
+        frappe.query_report.set_filter_value("from_date", null);
+        frappe.query_report.set_filter_value("to_date", null);
+        return;
+    }
+
+    let from_date = null;
+    let to_date = null;
+
+    if (period === "Weekly") {
         const week = frappe.query_report.get_filter_value("week");
         const week_range = week && getWeekRange(week);
 

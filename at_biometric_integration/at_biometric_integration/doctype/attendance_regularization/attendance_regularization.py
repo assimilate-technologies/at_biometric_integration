@@ -226,6 +226,16 @@ class AttendanceRegularization(Document):
         if not self.in_time or not self.out_time:
             return
 
+        def parse_time_string(value):
+            """Parse a time string that may be HH:MM, HH:MM:SS, or HH:MM:SS.ffffff."""
+            s = value.strip()
+            for fmt in ("%H:%M:%S.%f", "%H:%M:%S", "%H:%M"):
+                try:
+                    return datetime.strptime(s, fmt)
+                except ValueError:
+                    continue
+            return None
+
         def convert_to_seconds(value):
             if isinstance(value, timedelta):
                 return value.total_seconds()
@@ -247,20 +257,17 @@ class AttendanceRegularization(Document):
                 )
 
             if isinstance(value, str):
-                try:
-                    parsed_time = datetime.strptime(
-                        value.strip(), "%H:%M:%S"
-                    )
+                parsed_time = parse_time_string(value)
+                if parsed_time:
                     return (
                         parsed_time.hour * 3600
                         + parsed_time.minute * 60
                         + parsed_time.second
                         + parsed_time.microsecond / 1_000_000
                     )
-                except ValueError:
-                    frappe.throw(
-                        f"Invalid time format: {value}"
-                    )
+                frappe.throw(
+                    f"Invalid time format: {value}"
+                )
 
             frappe.throw(
                 f"Unsupported time format: {value}"
@@ -327,17 +334,21 @@ class AttendanceRegularization(Document):
                 return time_obj
 
             elif isinstance(time_obj, str):
-                try:
-                    parsed_time = datetime.strptime(
-                        time_obj.strip(), "%H:%M:%S"
-                    ).time()
+                s = time_obj.strip()
+                parsed_time = None
+                for fmt in ("%H:%M:%S.%f", "%H:%M:%S", "%H:%M"):
+                    try:
+                        parsed_time = datetime.strptime(s, fmt).time()
+                        break
+                    except ValueError:
+                        continue
 
-                    return datetime.combine(date, parsed_time)
-
-                except ValueError:
+                if parsed_time is None:
                     frappe.throw(
                         f"Invalid time format: {time_obj}"
                     )
+
+                return datetime.combine(date, parsed_time)
 
             else:
                 frappe.throw(

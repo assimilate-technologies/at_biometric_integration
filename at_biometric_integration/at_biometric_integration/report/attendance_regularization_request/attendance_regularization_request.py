@@ -59,23 +59,17 @@ def execute(filters=None):
     if filters.get("employee"):
         conditions.append(["employee", "=", filters.employee])
 
-    # Get date range from filters or use defaults
-    if filters.get("from_date") and filters.get("to_date"):
-        from_date = getdate(filters.from_date)
-        to_date = getdate(filters.to_date)
+    # Date range from filters. When NO dates are provided the report
+    # shows ALL data (no date condition is applied).
+    from_date = getdate(filters.from_date) if filters.get("from_date") else None
+    to_date = getdate(filters.to_date) if filters.get("to_date") else None
+
+    if from_date and to_date:
         conditions.append(["attendance_date", "between", [from_date, to_date]])
-    elif filters.get("from_date"):
-        from_date = getdate(filters.from_date)
-        to_date = date.today()
-        conditions.append(["attendance_date", "between", [from_date, to_date]])
-    elif filters.get("to_date"):
-        to_date = getdate(filters.to_date)
-        from_date = to_date - timedelta(days=7)
-        conditions.append(["attendance_date", "between", [from_date, to_date]])
-    else:
-        to_date = date.today()
-        from_date = to_date - timedelta(days=7)
-        conditions.append(["attendance_date", "between", [from_date, to_date]])
+    elif from_date:
+        conditions.append(["attendance_date", ">=", from_date])
+    elif to_date:
+        conditions.append(["attendance_date", "<=", to_date])
 
     # ---------------- Fetch Attendance ----------------
     attendance_records = frappe.get_all(
@@ -86,19 +80,26 @@ def execute(filters=None):
     )
 
     # Also fetch dates that have check-ins but may not have attendance records
-    # This ensures we show all dates with check-in data up to the specified end date (e.g., 19th Dec)
-    # Use the same date range as above
-    date_range_start = from_date
-    date_range_end = to_date
-    
-    # Get all employees who have check-ins in the date range (including dates without attendance records)
-    # This will include all dates up to to_date (e.g., 19th December)
-    checkin_dates = frappe.db.sql("""
+    # Uses the same date range as above; with no dates it fetches ALL check-in dates.
+    checkin_where = []
+    checkin_params = []
+
+    if from_date:
+        checkin_where.append("DATE(time) >= %s")
+        checkin_params.append(from_date)
+    if to_date:
+        checkin_where.append("DATE(time) <= %s")
+        checkin_params.append(to_date)
+
+    checkin_sql = """
         SELECT DISTINCT employee, DATE(time) as checkin_date
         FROM `tabEmployee Checkin`
-        WHERE DATE(time) >= %s AND DATE(time) <= %s
-        ORDER BY checkin_date ASC
-    """, (date_range_start, date_range_end), as_dict=True)
+    """
+    if checkin_where:
+        checkin_sql += " WHERE " + " AND ".join(checkin_where)
+    checkin_sql += " ORDER BY checkin_date ASC"
+
+    checkin_dates = frappe.db.sql(checkin_sql, tuple(checkin_params), as_dict=True)
     
     # Create a set of (employee, date) tuples from attendance records
     attendance_keys = {(r.employee, getdate(r.attendance_date)) for r in attendance_records}
@@ -407,21 +408,28 @@ def actual_working_duration(employee, date):
 def get_checkin_times_dynamic(employee, date):
     """
     Dynamically fetch check-in and check-out times from Employee Checkin table.
-    - Check-in time: FIRST check-in with log_type="IN" (or earliest if no log_type)
-    - Check-out time: LAST check-out with log_type="OUT" (or latest if no log_type)
+
+    Strategy (in priority order):
+    1. If explicit IN / OUT log_types exist → use them strictly (no cross-fallback).
+       This correctly surfaces missed IN or missed OUT punches.
+    2. If NO log_type is set on any punch:
+       - Multiple punches  → first punch = IN, last punch = OUT.
+       - Single punch      → compare against shift midpoint to guess direction:
+             Before midpoint → treat as IN punch  → OUT is missing.
+             At/After midpoint → treat as OUT punch → IN is missing.
+
     Returns: (in_time_datetime, out_time_datetime)
+             Either value can be None, meaning that punch is missing.
     """
     try:
-        # Ensure date is in string format for the query
         from datetime import date as date_type
         if isinstance(date, date_type):
             date_str = date.strftime("%Y-%m-%d")
-        elif hasattr(date, 'strftime'):
+        elif hasattr(date, "strftime"):
             date_str = date.strftime("%Y-%m-%d")
         else:
             date_str = str(getdate(date))
-        
-        # Fetch all check-ins for the employee on the given date
+
         checkins = frappe.get_all(
             "Employee Checkin",
             filters={
@@ -431,45 +439,87 @@ def get_checkin_times_dynamic(employee, date):
                 "longitude": "0.0",
             },
             fields=["time", "log_type"],
-            order_by="time asc"
+            order_by="time asc",
         )
 
         if not checkins:
             return None, None
 
-        # Find FIRST IN punch and LAST OUT punch
-        in_time_dt = None
-        out_time_dt = None
-        
-        # Separate check-ins by log_type
-        in_punches = []
-        out_punches = []
-        all_punches = []
-        
+        in_punches    = []
+        out_punches   = []
+        no_type_punches = []
+
         for checkin in checkins:
-            log_type = (checkin.get("log_type") or "").upper()
+            log_type = (checkin.get("log_type") or "").strip().upper()
             checkin_time = get_datetime(checkin.time)
-            all_punches.append(checkin_time)
-            
+
             if log_type == "IN":
                 in_punches.append(checkin_time)
             elif log_type == "OUT":
                 out_punches.append(checkin_time)
-        
-        # Use FIRST IN punch if available, otherwise use earliest punch
-        if in_punches:
-            in_time_dt = min(in_punches)  # First IN punch
-        elif all_punches:
-            in_time_dt = min(all_punches)  # Fallback to earliest
-        
-        # Use LAST OUT punch if available, otherwise use latest punch
-        if out_punches:
-            out_time_dt = max(out_punches)  # Last OUT punch
-        elif all_punches:
-            out_time_dt = max(all_punches)  # Fallback to latest
-        
+            else:
+                no_type_punches.append(checkin_time)
+
+        # ── Case 1: Explicit log_type present (at least one IN or OUT) ──────────
+        # Use each list strictly — a missing list means that punch is absent.
+        # Do NOT fall back to the other list; that would hide the missed punch.
+        if in_punches or out_punches:
+            in_time_dt  = min(in_punches)  if in_punches  else None   # None → missed IN
+            out_time_dt = max(out_punches) if out_punches else None   # None → missed OUT
+
+        # ── Case 2: No log_type set on any punch ─────────────────────────────────
+        elif no_type_punches:
+            sorted_punches = sorted(no_type_punches)
+
+            if len(sorted_punches) == 1:
+                # Single ambiguous punch — guess direction via shift midpoint.
+                single = sorted_punches[0]
+                shift_mid = _get_shift_midpoint(employee, date)
+
+                if shift_mid and single >= shift_mid:
+                    # Punch falls in second half of shift → likely OUT → IN missing
+                    in_time_dt  = None
+                    out_time_dt = single
+                else:
+                    # Punch falls in first half (or no shift info) → likely IN → OUT missing
+                    in_time_dt  = single
+                    out_time_dt = None
+            else:
+                # Multiple no-type punches → positional pairing: first = IN, last = OUT
+                in_time_dt  = sorted_punches[0]
+                out_time_dt = sorted_punches[-1]
+
+        else:
+            return None, None
+
         return in_time_dt, out_time_dt
-        
+
     except Exception as e:
-        frappe.log_error(f"Error fetching checkin times for {employee} on {date}: {str(e)}", "Get Checkin Times Error")
+        frappe.log_error(
+            f"Error fetching checkin times for {employee} on {date}: {str(e)}",
+            "Get Checkin Times Error",
+        )
         return None, None
+
+
+def _get_shift_midpoint(employee, att_date):
+    """
+    Return a datetime representing the midpoint of the employee's default shift on att_date.
+    Used as a heuristic to classify a single no-log-type punch as IN or OUT.
+    Returns None if shift information is unavailable.
+    """
+    try:
+        default_shift = frappe.db.get_value("Employee", employee, "default_shift")
+        if not default_shift:
+            return None
+        st = frappe.get_doc("Shift Type", default_shift)
+        if not st.start_time or not st.end_time:
+            return None
+
+        ref_date = getdate(att_date)
+        # st.start_time / st.end_time are timedelta objects in Frappe
+        shift_start_dt = datetime.combine(ref_date, (datetime.min + st.start_time).time())
+        shift_end_dt   = datetime.combine(ref_date, (datetime.min + st.end_time).time())
+        return shift_start_dt + (shift_end_dt - shift_start_dt) / 2
+    except Exception:
+        return None
