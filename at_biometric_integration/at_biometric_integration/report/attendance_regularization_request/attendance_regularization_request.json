@@ -14,16 +14,27 @@
       "default": "2026"
     },
     {
+      "fieldname": "period",
+      "label": "Period",
+      "fieldtype": "Select",
+      "options": "\nDaily\nWeekly\nMonthly",
+      "default": "Daily"
+    },
+    {
+      "fieldname": "from_date",
+      "label": "From Date",
+      "fieldtype": "Date"
+    },
+    {
+      "fieldname": "to_date",
+      "label": "To Date",
+      "fieldtype": "Date"
+    },
+    {
       "fieldname": "employee",
       "label": "Employee",
       "fieldtype": "Link",
       "options": "Employee"
-    },
-    {
-      "fieldname": "period",
-      "label": "Period",
-      "fieldtype": "Select",
-      "options": "\nWeekly\nMonthly"
     },
     {
       "fieldname": "month",
@@ -36,16 +47,6 @@
       "label": "Week",
       "fieldtype": "Select",
       "options": "\nWeek 1\nWeek 2\nWeek 3\nWeek 4\nWeek 5"
-    },
-    {
-      "fieldname": "from_date",
-      "label": "From Date",
-      "fieldtype": "Date"
-    },
-    {
-      "fieldname": "to_date",
-      "label": "To Date",
-      "fieldtype": "Date"
     },
     {
       "fieldname": "status",
