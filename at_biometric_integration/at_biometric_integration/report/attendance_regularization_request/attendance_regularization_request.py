@@ -244,9 +244,10 @@ def execute(filters=None):
                 eligible = False
 
         # Set action button and notification
-        action_label = "Create Regularization Request" if eligible else ""
+        # Show button only after Shift End Time has passed for that attendance date
+        action_label = "Create Regularization Request" if eligible and shift_has_ended(shift_end, att_date, today_dt) else ""
         cache_key = f"reg_notif::{emp}::{att_date}"
-        if eligible and enable_notifications and not frappe.cache().get_value(cache_key):
+        if action_label and enable_notifications and not frappe.cache().get_value(cache_key):
             send_regularization_notification(emp, att_date, notification_template)
             frappe.cache().set_value(cache_key, 1, expires_in_sec=86400)
 
@@ -280,6 +281,19 @@ def execute(filters=None):
     return columns, data
 
 # ---------------- Helper Functions ----------------
+def shift_has_ended(shift_end, att_date, now_dt):
+    """Return True only when current time is past Shift End for the attendance date."""
+    if not shift_end or shift_end == "-":
+        return False
+    try:
+        if isinstance(shift_end, str):
+            from frappe.utils import get_time
+            shift_end = get_time(shift_end)
+        shift_end_dt = datetime.combine(getdate(att_date), shift_end)
+        return now_dt >= shift_end_dt
+    except Exception:
+        return False
+
 def get_shift_from_default_shift(employee):
     try:
         default_shift = frappe.db.get_value("Employee", employee, "default_shift")

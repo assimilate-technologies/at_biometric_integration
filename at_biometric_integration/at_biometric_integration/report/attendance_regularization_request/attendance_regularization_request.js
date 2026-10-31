@@ -9,7 +9,7 @@ frappe.query_reports["Attendance Regularization Request"] = {
             default: String(new Date().getFullYear()),
             on_change: function () {
                 const period = frappe.query_report.get_filter_value("period");
-                if (!period || period === "Daily") return;
+                if (!period || period === "Date Range") return;
                 updateMonthlyDates();
                 frappe.query_report.refresh();
             },
@@ -18,10 +18,10 @@ frappe.query_reports["Attendance Regularization Request"] = {
             fieldname: "period",
             label: "Period",
             fieldtype: "Select",
-            // Default = Daily: shows only From/To Date for a simple single-day lookup.
-            // Weekly/Monthly auto-compute date ranges from Month/Week/Year filters.
-            options: ["", "Daily", "Weekly", "Monthly"],
-            default: "Daily",
+            // Default = Date Range: shows only From/To Date for a simple date-range lookup.
+            // Monthly auto-computes date ranges from Month/Year filters.
+            options: ["", "Date Range", "Monthly"],
+            default: "Date Range",
             on_change: function () {
                 updateFilterVisibility();
                 setDefaultDates();
@@ -33,10 +33,10 @@ frappe.query_reports["Attendance Regularization Request"] = {
             label: "From Date",
             fieldtype: "Date",
             on_change: function () {
-                // Only manually trigger refresh in Daily mode; other modes
-                // have their dates auto-set so double‑fetches are avoided.
+                // Only manually trigger refresh in Date Range mode; Monthly mode
+                // has its dates auto-set so double‑fetches are avoided.
                 const period = frappe.query_report.get_filter_value("period");
-                if (period === "Daily") frappe.query_report.refresh();
+                if (period === "Date Range") frappe.query_report.refresh();
             },
         },
         {
@@ -45,7 +45,7 @@ frappe.query_reports["Attendance Regularization Request"] = {
             fieldtype: "Date",
             on_change: function () {
                 const period = frappe.query_report.get_filter_value("period");
-                if (period === "Daily") frappe.query_report.refresh();
+                if (period === "Date Range") frappe.query_report.refresh();
             },
         },
         {
@@ -89,16 +89,19 @@ frappe.query_reports["Attendance Regularization Request"] = {
             default: new Date().toLocaleString("en-US", { month: "long" }),
             on_change: function () {
                 const period = frappe.query_report.get_filter_value("period");
-                if (!period || period === "Daily") return;
+                if (!period || period === "Date Range") return;
                 updateMonthlyDates();
                 frappe.query_report.refresh();
             },
         },
         {
+            // Week filter is hidden (Weekly period removed). Kept as a hidden
+            // helper filter so any residual references stay safe.
             fieldname: "week",
             label: "Week",
             fieldtype: "Select",
             options: ["", "Week 1", "Week 2", "Week 3", "Week 4", "Week 5"],
+            hidden: 1,
             on_change: function () {
                 setDefaultDates();
                 frappe.query_report.refresh();
@@ -109,7 +112,7 @@ frappe.query_reports["Attendance Regularization Request"] = {
     onload: function (report) {
         // Period is blank on load → From/To are left empty so the
         // report shows ALL data by default. User can pick Period =
-        // Weekly/Monthly for auto-ranges, or manually set From/To.
+        // Monthly for auto-ranges, or manually set From/To.
         updateFilterVisibility();
         setDefaultDates();
         attachRegularizeButtonHandler();
@@ -171,27 +174,26 @@ function updateFilterVisibility() {
     const period = frappe.query_report.get_filter_value("period");
     const qr = frappe.query_report;
 
-    // Daily: show From/To Date (user picks dates manually); hide Month & Week.
-    // Weekly/Monthly: hide From/To Date (auto-managed); show Month (and Week for Weekly).
+    // Date Range: show From/To Date (user picks dates manually); hide Month & Week.
+    // Monthly: hide From/To Date (auto-managed); show Month; hide Week.
     // Blank: show From/To Date for free-form date range; hide Month & Week.
 
-    const isDaily   = period === "Daily";
-    const isWeekly  = period === "Weekly";
-    const isMonthly = period === "Monthly";
+    const isDateRange = period === "Date Range";
+    const isMonthly   = period === "Monthly";
 
-    // From / To Date: SHOW for Daily or blank; HIDE for Weekly/Monthly (auto-managed)
-    qr.toggle_filter_display("from_date", isWeekly || isMonthly);
-    qr.toggle_filter_display("to_date",   isWeekly || isMonthly);
+    // From / To Date: SHOW for Date Range or blank; HIDE for Monthly (auto-managed)
+    qr.toggle_filter_display("from_date", isMonthly);
+    qr.toggle_filter_display("to_date",   isMonthly);
 
-    // Month: SHOW only when Weekly or Monthly
-    qr.toggle_filter_display("month", !isWeekly && !isMonthly);
+    // Month: SHOW only when Monthly
+    qr.toggle_filter_display("month", !isMonthly);
 
-    // Week: SHOW only when Weekly
-    qr.toggle_filter_display("week", !isWeekly);
+    // Week: always HIDDEN (Weekly period removed)
+    qr.toggle_filter_display("week", true);
 
-    // Clear auto-managed date filters when switching away from Daily/blank
-    // so stale manual dates don't bleed into Weekly/Monthly modes.
-    if (isWeekly || isMonthly) {
+    // Clear auto-managed date filters when switching away from Date Range/blank
+    // so stale manual dates don't bleed into Monthly mode.
+    if (isMonthly) {
         qr.set_filter_value("from_date", null);
         qr.set_filter_value("to_date", null);
     }
@@ -212,56 +214,6 @@ function to_date_str(value) {
     return String(value || "").slice(0, 10);
 }
 
-// Month/Year to calculate against: the Month & Year filters when both are
-// set, otherwise today's month/year.
-function getReferenceMonthYear() {
-    const today = frappe.datetime.get_today(); // "YYYY-MM-DD"
-    const month = frappe.query_report.get_filter_value("month");
-    const year = frappe.query_report.get_filter_value("year");
-
-    const month_index = REPORT_MONTHS.indexOf(month);
-
-    return {
-        year: Number(year) || Number(today.slice(0, 4)),
-        month_index: month_index >= 0 ? month_index : Number(today.slice(5, 7)) - 1,
-    };
-}
-
-// Week 1 = 1st-7th, Week 2 = 8th-14th, Week 3 = 15th-21st,
-// Week 4 = 22nd-28th, Week 5 = 29th → month end.
-// Clamped to the selected month (Week 5 of February → 28th only).
-function getWeekRange(week_label) {
-    const week_number = parseInt(String(week_label).replace(/\D/g, ""), 10);
-    if (!week_number) return null;
-
-    const { year, month_index } = getReferenceMonthYear();
-    const month_str = `${year}-${String(month_index + 1).padStart(2, "0")}`;
-    const last_day = new Date(year, month_index + 1, 0).getDate();
-
-    let start = 1 + (week_number - 1) * 7;
-    let end = start + 6;
-    if (start > last_day) start = last_day;
-    if (end > last_day) end = last_day;
-
-    return {
-        from_date: `${month_str}-${String(start).padStart(2, "0")}`,
-        to_date: `${month_str}-${String(end).padStart(2, "0")}`,
-    };
-}
-
-// First / last day of the selected Month & Year (falls back to the current
-// month/year when either filter is blank).
-function getMonthRange() {
-    const { year, month_index } = getReferenceMonthYear();
-    const month_str = `${year}-${String(month_index + 1).padStart(2, "0")}`;
-    const last_day = new Date(year, month_index + 1, 0).getDate();
-
-    return {
-        from_date: `${month_str}-01`,
-        to_date: `${month_str}-${String(last_day).padStart(2, "0")}`,
-    };
-}
-
 function setDefaultDates() {
     const period = frappe.query_report.get_filter_value("period");
 
@@ -276,26 +228,13 @@ function setDefaultDates() {
     let from_date = null;
     let to_date = null;
 
-    if (period === "Daily") {
-        // Daily → default both From Date and To Date to today.
+    if (period === "Date Range") {
+        // Date Range → default both From Date and To Date to today.
         // The user may then adjust them freely.
         const today = frappe.datetime.get_today();
         from_date = today;
         to_date   = today;
 
-    } else if (period === "Weekly") {
-        const week = frappe.query_report.get_filter_value("week");
-
-        // No Week chosen yet → show the WHOLE selected month.
-        // Once the user picks Week 1/2/3… the range narrows to that week.
-        // Always scoped to the SELECTED month (never the calendar week,
-        // which can straddle two months).
-        const range = week ? getWeekRange(week) : getMonthRange();
-
-        if (range) {
-            from_date = range.from_date;
-            to_date = range.to_date;
-        }
     } else if (period === "Monthly") {
         // Monthly: respect Month/Year filters if both are set; else current month/year
         const month = frappe.query_report.get_filter_value("month");
@@ -326,20 +265,8 @@ function setDefaultDates() {
 
 // Update monthly date range based on selected month/year
 function updateMonthlyDates() {
-    const period = frappe.query_report.get_filter_value("period");
-    const week = frappe.query_report.get_filter_value("week");
     const month = frappe.query_report.get_filter_value("month");
     const year = frappe.query_report.get_filter_value("year");
-
-    // Weekly: no Week chosen → the whole selected month; otherwise that week.
-    // So changing the Month alone immediately shows all of that month's data.
-    if (period === "Weekly") {
-        const range = week ? getWeekRange(week) : getMonthRange();
-        if (!range) return;
-        frappe.query_report.set_filter_value("from_date", range.from_date);
-        frappe.query_report.set_filter_value("to_date", range.to_date);
-        return;
-    }
 
     if (!month || !year) return;
 

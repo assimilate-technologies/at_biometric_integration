@@ -17,8 +17,8 @@
       "fieldname": "period",
       "label": "Period",
       "fieldtype": "Select",
-      "options": "\nDaily\nWeekly\nMonthly",
-      "default": "Daily"
+      "options": "\nDate Range\nMonthly",
+      "default": "Date Range"
     },
     {
       "fieldname": "from_date",
@@ -46,7 +46,8 @@
       "fieldname": "week",
       "label": "Week",
       "fieldtype": "Select",
-      "options": "\nWeek 1\nWeek 2\nWeek 3\nWeek 4\nWeek 5"
+      "options": "\nWeek 1\nWeek 2\nWeek 3\nWeek 4\nWeek 5",
+      "hidden": 1
     },
     {
       "fieldname": "status",
