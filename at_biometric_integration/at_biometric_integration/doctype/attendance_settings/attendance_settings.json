@@ -15,8 +15,9 @@
   "regularization_to_hours",
   "min_working_hours",
   "checkout_grace_end_minutes",
-  "attendance_grace_end_mins",
-  "notification_settings_section",
+   "attendance_grace_end_mins",
+   "min_working_hour_for_half_day",
+   "notification_settings_section",
   "enable_notifications",
   "notification_message_template",
   "auto_submit_after_shift_hours"
@@ -88,11 +89,16 @@
    "fieldtype": "Int",
    "label": "Attendance Grace Start (mins)"
   },
-  {
-   "fieldname": "attendance_grace_end_mins",
-   "fieldtype": "Int",
-   "label": "Attendance Grace End (mins)"
-  },
+   {
+    "fieldname": "attendance_grace_end_mins",
+    "fieldtype": "Int",
+    "label": "Attendance Grace End (mins)"
+   },
+   {
+    "fieldname": "min_working_hour_for_half_day",
+    "fieldtype": "Float",
+    "label": "Min Working Hour For Half Day"
+   },
  {
      "default": "0",
      "fieldname": "auto_submit_after_shift_hours",
