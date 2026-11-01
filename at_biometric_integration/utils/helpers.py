@@ -350,6 +350,9 @@ def get_attendance_settings():
             "min_working_hours": float(
                 getattr(s, "min_working_hours", 4) or 4
             ),
+            "min_working_hour_for_half_day": float(
+                getattr(s, "min_working_hour_for_half_day", 0) or 0
+            ),
             "auto_submit_hours_after_shift": float(
                 getattr(s, "auto_submit_hours_after_shift", 4) or 4
             ),
@@ -365,6 +368,7 @@ def get_attendance_settings():
             "regularization_from_hours": 0,
             "regularization_to_hours": 24,
             "min_working_hours": 4,
+            "min_working_hour_for_half_day": 0,
             "auto_submit_hours_after_shift": 4,
             "max_regularization_days": 3,
         })
@@ -772,6 +776,12 @@ def determine_attendance_status(
         return leave_status[0]
 
     # Priority 4: Short work or absent.
+    min_half_day = float(
+        getattr(settings, "min_working_hour_for_half_day", 0) or 0
+    )
+    if min_half_day and 0 < working_hours < min_half_day:
+        return "Absent"
+
     return "Half Day" if working_hours > 0 else "Absent"
 
 
