@@ -250,6 +250,7 @@ from frappe.utils import get_datetime, now_datetime
 
 # helpers expected to exist in your repo (you referenced them before)
 from .helpers import get_leave_status, is_holiday, calculate_working_hours, determine_attendance_status
+from .attendance_links import pick_checkin
 
 # ------------------
 # ASSUMPTIONS / TODO
@@ -483,7 +484,7 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             "employee": employee,
             "time": ["between", [f"{from_date} 00:00:00", f"{to_date} 23:59:59"]]
         },
-        fields=["name", "time", "log_type"],
+        fields=["name", "time", "log_type", "attendance"],
         order_by="time asc", 
         limit_page_length=50000
     )
@@ -598,7 +599,15 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
                 update_fields["out_time"] = last_time
             if hours is not None:
                 update_fields["working_hours"] = hours
-            
+
+            # Link Employee Checkin (validate hook does not run on db_set)
+            if daily and not frappe.db.get_value(
+                "Attendance", existing_submitted, "employee_checkin", cache=False
+            ):
+                checkin = pick_checkin(daily, attendance_name=existing_submitted, in_time=first_time)
+                if checkin:
+                    update_fields["employee_checkin"] = checkin
+
             if update_fields:
                 frappe.db.set_value("Attendance", existing_submitted, update_fields, update_modified=False)
             

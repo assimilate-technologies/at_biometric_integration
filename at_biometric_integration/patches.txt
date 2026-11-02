@@ -5,3 +5,5 @@
 [post_model_sync]
 at_biometric_integration.patches.workflow_state_action
 at_biometric_integration.patches.create_biometric_roles_and_permissions
+at_biometric_integration.patches.add_employee_checkin_link
+at_biometric_integration.patches.add_attendance_regularization_link

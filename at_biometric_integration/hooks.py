@@ -150,13 +150,14 @@ doctype_list_js = {
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "Attendance": {
+        "validate": [
+            "at_biometric_integration.utils.attendance_links.set_employee_checkin_link",
+            "at_biometric_integration.utils.attendance_links.set_attendance_regularization_link",
+        ],
+    }
+}
 
 # Scheduled Tasks
 # ---------------
@@ -194,9 +195,9 @@ doctype_list_js = {
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
-# override_doctype_dashboards = {
-# 	"Task": "at_biometric_integration.task.get_dashboard_data"
-# }
+override_doctype_dashboards = {
+    "Attendance": "at_biometric_integration.utils.dashboard.get_attendance_dashboard"
+}
 
 # exempt linked doctypes from being automatically cancelled
 #

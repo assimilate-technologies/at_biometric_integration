@@ -474,6 +474,7 @@ class AttendanceRegularization(Document):
             "in_time": in_time,
             "out_time": out_time,
             "working_hours": working_hours,
+            "attendance_regularization": self.name,
         }
 
         if existing_attendance:
