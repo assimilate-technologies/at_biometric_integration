@@ -203,8 +203,13 @@ def execute(filters=None):
         # Check for leave (using result from helper above)
         has_leave = bool(leave_info[0])
 
-        # Calculate hours since attendance date
-        hours_passed = calculate_hours_excluding_weekends(att_date, today_dt)
+        # Regularization window anchored to the shift of this attendance date:
+        #   window starts = shift start + regularization_from_hours
+        #   window closes = shift end   + regularization_to_hours
+        window_start, window_end = get_regularization_window(
+            shift_start, shift_end, att_date, min_delay_hours, max_delay_hours
+        )
+        within_window = window_start <= today_dt <= window_end
 
 
         # Monthly approved requests
@@ -219,7 +224,7 @@ def execute(filters=None):
         # ---- New Regularization Rules ----
         if enable_feature and not has_leave:
             # (1) Within regularization time window
-            if min_delay_hours <= hours_passed <= max_delay_hours:
+            if within_window:
                 # (2) Missing check-in or out
                 if missed_punch in ["IN", "OUT", "BOTH"]:
                     eligible = True
@@ -233,19 +238,40 @@ def execute(filters=None):
                     eligible = True
                     remarks.append("Eligible: Check-in outside grace window")
             else:
-                if hours_passed < min_delay_hours:
-                    remarks.append(f"Wait for {min_delay_hours} hours to regularize")
-                elif hours_passed > max_delay_hours:
-                    remarks.append(f"{max_delay_hours} hours exceeded - not allowed")
+                if today_dt < window_start:
+                    remarks.append(
+                        f"Wait for {min_delay_hours} hours after shift start "
+                        f"({window_start.strftime('%d-%m-%Y %H:%M')}) to regularize"
+                    )
+                elif today_dt > window_end:
+                    remarks.append(
+                        f"Exceeded {max_delay_hours} hours after shift end "
+                        f"({window_end.strftime('%d-%m-%Y %H:%M')}) - not allowed"
+                    )
 
-            # Monthly limit
+# Monthly limit
             if completed_requests >= max_requests_per_month:
                 remarks.append(f"Monthly limit reached ({max_requests_per_month})")
                 eligible = False
 
-        # Set action button and notification
-        # Show button only after Shift End Time has passed for that attendance date
-        action_label = "Create Regularization Request" if eligible and shift_has_ended(shift_end, att_date, today_dt) else ""
+            
+
+            # If an Attendance Regularization already submitted, hide the button
+            attendance_name = record.get("name")
+            if attendance_name:
+                reg_name = frappe.db.get_value("Attendance", attendance_name, "attendance_regularization")
+                if reg_name and frappe.db.get_value("Attendance Regularization", reg_name, "docstatus") == 1:
+                    eligible = False
+                    remarks.append("Regularization already submitted")
+            
+            # Holiday check: regularization not applicable for holiday attendance
+            if record.get("status") == "Holiday":
+                eligible = False
+                remarks.append("Holiday: Regularization not applicable")
+
+        # Set action button: shown only while Regularization Eligible = Yes,
+        # which itself only becomes Yes inside the settings based window.
+        action_label = "Create Regularization" if eligible else ""
         cache_key = f"reg_notif::{emp}::{att_date}"
         if action_label and enable_notifications and not frappe.cache().get_value(cache_key):
             send_regularization_notification(emp, att_date, notification_template)
@@ -281,6 +307,46 @@ def execute(filters=None):
     return columns, data
 
 # ---------------- Helper Functions ----------------
+def get_regularization_window(shift_start, shift_end, attendance_date, from_hours, to_hours):
+    """Return (window_start, window_end) for the Create Regularization button.
+
+    window_start = attendance date shift start + Attendance Settings.regularization_from_hours
+    window_end   = attendance date shift end   + Attendance Settings.regularization_to_hours
+
+    Example (from_hours=10, to_hours=20, shift 09:30 - 18:30, attendance date 02-11-2026):
+        button is available from 02-11-2026 19:30 until 03-11-2026 14:30.
+
+    When shift timings are missing the window is anchored to midnight of the
+    attendance date (button available from from_hours to to_hours after the date).
+    """
+    ref_date = getdate(attendance_date)
+    start_clock = parse_clock(shift_start) or parse_clock(shift_end) or time.min
+    end_clock = parse_clock(shift_end) or start_clock
+
+    window_start = datetime.combine(ref_date, start_clock) + timedelta(hours=int(from_hours))
+    window_end = datetime.combine(ref_date, end_clock) + timedelta(hours=int(to_hours))
+    return window_start, window_end
+
+
+def parse_clock(value):
+    """Normalise shift time (time / timedelta / string) into a datetime.time."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value in ("", "-"):
+            return None
+    if isinstance(value, timedelta):
+        return (datetime.min + value).time()
+    if isinstance(value, time):
+        return value
+    try:
+        from frappe.utils import get_time
+        return get_time(str(value))
+    except Exception:
+        return None
+
+
 def shift_has_ended(shift_end, att_date, now_dt):
     """Return True only when current time is past Shift End for the attendance date."""
     if not shift_end or shift_end == "-":
