@@ -1,10 +1,7 @@
-
 import frappe
 
 
 def execute():
-    doctype = "Attendance Settings"
-
     fields = [
         {
             "fieldname": "half_day_from",
@@ -21,14 +18,24 @@ def execute():
     ]
 
     for field in fields:
-        if not frappe.db.exists(
+        existing = frappe.db.exists(
             "Custom Field",
-            {"dt": doctype, "fieldname": field["fieldname"]}
-        ):
-            frappe.get_doc({
-                "doctype": "Custom Field",
-                "dt": doctype,
-                **field,
-            }).insert()
+            {
+                "dt": "Attendance Settings",
+                "fieldname": field["fieldname"],
+            },
+        )
 
-    frappe.clear_cache(doctype=doctype)
+        if existing:
+            print(f"Skipping existing field: {field['fieldname']}")
+            continue
+
+        frappe.get_doc({
+            "doctype": "Custom Field",
+            "dt": "Attendance Settings",
+            **field,
+        }).insert()
+
+        print(f"Created field: {field['fieldname']}")
+
+    frappe.clear_cache(doctype="Attendance Settings")
