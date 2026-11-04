@@ -3,7 +3,7 @@ import frappe
 
 
 def execute():
-    doctype = "Attendance Setting"
+    doctype = "Attendance Settings"
 
     fields = [
         {
