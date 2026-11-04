@@ -218,9 +218,12 @@ class AttendanceRegularization(Document):
 
     def validate(self):
         """
-        Validate that In Time is earlier than Out Time.
-        Supports Frappe Time values represented as time,
-        timedelta, datetime, or strings.
+        Validate:
+        1. In Time is earlier than Out Time.
+        2. No duplicate Attendance Regularization exists for same employee + date.
+        3. The regularization is being created within the allowed time window
+           (regularization_from_hours after shift start  →
+            regularization_to_hours after shift end) defined in Attendance Settings.
         """
 
         if not self.in_time or not self.out_time:
@@ -279,6 +282,79 @@ class AttendanceRegularization(Document):
         if in_seconds >= out_seconds:
             frappe.throw(
                 "In Time must be before Out Time."
+            )
+
+        # --- Duplicate check ---
+        existing = frappe.db.exists(
+            "Attendance Regularization",
+            {
+                "employee": self.employee,
+                "date": self.date,
+                "docstatus": ["!=", 2],   # not cancelled
+                "name": ["!=", self.name or ""],
+            },
+        )
+        if existing:
+            frappe.throw(
+                f"An Attendance Regularization already exists for "
+                f"Employee {self.employee} on {self.date}: {existing}. "
+                "Please cancel the existing record before creating a new one."
+            )
+
+        # --- Regularization window check ---
+        self._validate_regularization_window()
+
+    def _validate_regularization_window(self):
+        """
+        Validate that the regularization is being created/saved within the
+        allowed time window configured in Attendance Settings:
+          - Window opens : shift_start  + regularization_from_hours
+          - Window closes: shift_end    + regularization_to_hours
+        If enable_regularization is False in Settings, skip this check.
+        """
+        from at_biometric_integration.utils.helpers import (
+            get_attendance_settings,
+            get_employee_shift,
+            get_shift_end_datetime,
+        )
+        from frappe.utils import now_datetime, get_datetime
+
+        settings = get_attendance_settings()
+
+        if not settings.enable_regularization:
+            return
+
+        reg_from_hours = float(settings.regularization_from_hours or 0)
+        reg_to_hours = float(settings.regularization_to_hours or 24)
+
+        # Get the employee's shift for the regularization date
+        shift_doc = get_employee_shift(self.employee, self.date)
+
+        # Determine shift start datetime
+        if shift_doc and getattr(shift_doc, "start_time", None):
+            shift_start_dt = get_datetime(f"{self.date} {shift_doc.start_time}")
+        else:
+            # Default shift start 09:00 when not configured
+            shift_start_dt = get_datetime(f"{self.date} 09:00:00")
+
+        # Determine shift end datetime using existing helper
+        shift_end_dt = get_shift_end_datetime(shift_doc, self.date)
+
+        window_open  = shift_start_dt + timedelta(hours=reg_from_hours)
+        window_close = shift_end_dt   + timedelta(hours=reg_to_hours)
+
+        now = now_datetime()
+
+        if now < window_open:
+            frappe.throw(
+                f"Attendance Regularization for {self.date} cannot be submitted yet. "
+                f"The regularization window opens at {window_open.strftime('%d-%m-%Y %H:%M')}."
+            )
+
+        if now > window_close:
+            frappe.throw(
+                f"Attendance Regularization for {self.date} cannot be submitted. "
+                f"The regularization window closed at {window_close.strftime('%d-%m-%Y %H:%M')}."
             )
 
     def on_submit(self):
@@ -429,7 +505,14 @@ class AttendanceRegularization(Document):
     def create_or_update_attendance(
         self, employee_details, in_time=None, out_time=None
     ):
-        """Create or update Attendance record."""
+        """
+        Create or update Attendance record from an approved regularization.
+
+        - If an existing Attendance record is found (draft or submitted),
+          update its in_time, out_time, working_hours, status, and
+          attendance_regularization using db_set (works even on submitted docs).
+        - If no record exists, create a new submitted Attendance.
+        """
 
         existing_attendance = frappe.db.get_value(
             "Attendance",
@@ -437,7 +520,8 @@ class AttendanceRegularization(Document):
                 "employee": self.employee,
                 "attendance_date": self.date,
             },
-            "name",
+            ["name", "docstatus"],
+            as_dict=True,
         )
 
         working_hours = 0.0
@@ -463,33 +547,42 @@ class AttendanceRegularization(Document):
             holiday_flag,
         )
 
-        attendance_data = {
-            "employee": self.employee,
-            "employee_name": self.employee_name,
-            "attendance_date": self.date,
-            "status": status,
-            "company": employee_details.company,
-            "shift": employee_details.default_shift,
-            "docstatus": 1,
-            "in_time": in_time,
-            "out_time": out_time,
-            "working_hours": working_hours,
-            "attendance_regularization": self.name,
-        }
-
         if existing_attendance:
+            # Use db_set so it works even on submitted (docstatus=1) records
             frappe.db.set_value(
                 "Attendance",
-                existing_attendance,
-                attendance_data,
+                existing_attendance.name,
+                {
+                    "status": status,
+                    "in_time": in_time,
+                    "out_time": out_time,
+                    "working_hours": working_hours,
+                    "attendance_regularization": self.name,
+                },
+                update_modified=False,
             )
         else:
-            frappe.get_doc(
-                {
-                    "doctype": "Attendance",
-                    **attendance_data,
-                }
-            ).insert(ignore_permissions=True)
+            # No attendance record for this date — create a new submitted one
+            from at_biometric_integration.utils.helpers import get_employee_shift
+            shift_doc = get_employee_shift(self.employee, self.date)
+            shift_name = shift_doc.name if shift_doc else employee_details.default_shift
+
+            att = frappe.get_doc({
+                "doctype": "Attendance",
+                "employee": self.employee,
+                "employee_name": self.employee_name,
+                "attendance_date": self.date,
+                "status": status,
+                "company": employee_details.company,
+                "shift": shift_name,
+                "in_time": in_time,
+                "out_time": out_time,
+                "working_hours": working_hours,
+                "attendance_regularization": self.name,
+            })
+            att.flags.ignore_permissions = True
+            att.insert()
+            att.submit()
 
     def on_cancel(self):
         """

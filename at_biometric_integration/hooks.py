@@ -267,6 +267,10 @@ scheduler_events = {
         ],
         "*/10 * * * *": [
             "at_biometric_integration.utils.attendance_processing.auto_submit_due_attendances"
+        ],
+        # At midnight every day: create Absent records for all Active employees
+        "0 0 * * *": [
+            "at_biometric_integration.utils.attendance_processing.generate_daily_absent"
         ]
     },
     "hourly": [

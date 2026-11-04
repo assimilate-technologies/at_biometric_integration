@@ -11,6 +11,8 @@
   "max_requests_per_month",
   "checkin_grace_start_minutes",
   "attendance_grace_start_mins",
+  "half_day_from",
+  "half_day_to",
   "column_break_aaiu",
   "regularization_to_hours",
   "min_working_hours",
@@ -89,6 +91,16 @@
    "fieldtype": "Int",
    "label": "Attendance Grace Start (mins)"
   },
+  {
+   "fieldname": "half_day_from",
+   "fieldtype": "Time",
+   "label": "Half Day From"
+  },
+  {
+   "fieldname": "half_day_to",
+   "fieldtype": "Time",
+   "label": "Half Day To"
+  },
    {
     "fieldname": "attendance_grace_end_mins",
     "fieldtype": "Int",
@@ -110,7 +122,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-11-10 17:18:59.470898",
+ "modified": "2026-11-04 05:51:49.000000",
  "modified_by": "Administrator",
  "module": "At Biometric Integration",
  "name": "Attendance Settings",

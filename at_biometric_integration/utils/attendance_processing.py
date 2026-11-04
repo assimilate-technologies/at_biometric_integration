@@ -246,10 +246,10 @@
 
 import frappe
 from datetime import datetime, timedelta
-from frappe.utils import get_datetime, now_datetime
+from frappe.utils import get_datetime, now_datetime, getdate, add_days
 
 # helpers expected to exist in your repo (you referenced them before)
-from .helpers import get_leave_status, is_holiday, calculate_working_hours, determine_attendance_status
+from .helpers import get_leave_status, is_holiday, calculate_working_hours, determine_attendance_status, get_employee_shift
 from .attendance_links import pick_checkin
 
 # ------------------
@@ -390,8 +390,9 @@ def auto_submit_due_attendances():
             # compute expected shift end datetime
             shift_end_dt = get_shift_end_datetime(a.employee, a.attendance_date, a.get("shift"))
 
-            # condition 1: 4 hours after shift end
-            if now >= (shift_end_dt + timedelta(hours=4)):
+            # condition 1: auto_submit_after_shift_hours after shift end
+            auto_submit_hours = float(settings.auto_submit_after_shift_hours or 4)
+            if now >= (shift_end_dt + timedelta(hours=auto_submit_hours)):
                 # submit if meets working hours rule
                 if (a.working_hours or 0) >= settings.min_working_hours:
                     if auto_submit_attendance_doc(frappe._dict(a), settings):
@@ -651,7 +652,7 @@ def auto_submit_new_attendances(attendance_names):
     """
     Called after new Attendance docs are created. This checks each new attendance doc
     and auto-submits immediately if it meets the rules (e.g. created after checkins and already
-    has enough working hours AND either shift_end+4h already passed or regularization window expired).
+    has enough working hours AND either shift_end+auto_submit_after_shift_hours already passed or regularization window expired).
     """
     if not attendance_names:
         return []
@@ -662,11 +663,12 @@ def auto_submit_new_attendances(attendance_names):
         try:
             doc = frappe.get_doc("Attendance", name)
             # re-use the logic in auto_submit_due_attendances by wrapping doc into a dict
-            # We'll check: if now >= shift_end+4h or regularization expired, submit.
+            # We'll check: if now >= shift_end+auto_submit_after_shift_hours or regularization expired, submit.
             shift_end_dt = get_shift_end_datetime(doc.employee, doc.attendance_date, doc.shift)
             now = now_datetime()
 
-            if now >= (shift_end_dt + timedelta(hours=4)):
+            auto_submit_hours = float(settings.auto_submit_after_shift_hours or 4)
+            if now >= (shift_end_dt + timedelta(hours=auto_submit_hours)):
                 if (doc.working_hours or 0) >= settings.min_working_hours:
                     doc.flags.ignore_permissions = True
                     doc.submit()
@@ -687,3 +689,81 @@ def auto_submit_new_attendances(attendance_names):
     if submitted:
         frappe.db.commit()
     return submitted
+
+
+# ------------------------
+# Daily midnight: generate Absent records for Active employees
+# ------------------------
+def generate_daily_absent():
+    """
+    Called at 12:00 AM every day via cron scheduler.
+    Creates a draft Attendance record with status = 'Absent' for every
+    Active employee that does NOT already have an Attendance record for today.
+
+    Holiday / On Leave employees get their corresponding status instead of Absent.
+    """
+    today = getdate()
+
+    # Fetch only Active employees
+    employees = frappe.get_all(
+        "Employee",
+        filters={"status": "Active"},
+        fields=["name", "employee_name", "company", "default_shift"],
+    )
+
+    created = []
+    for emp in employees:
+        try:
+            # Skip if an attendance record already exists (draft or submitted)
+            if frappe.db.exists(
+                "Attendance",
+                {"employee": emp.name, "attendance_date": today},
+            ):
+                continue
+
+            # Determine actual status (Holiday / On Leave / Absent)
+            holiday_flag = is_holiday(emp.name, today)
+            leave_status = get_leave_status(emp.name, today)
+
+            if holiday_flag:
+                status = "Holiday"
+                leave_type = None
+                leave_application = None
+            elif leave_status and leave_status[0]:
+                status = leave_status[0]       # "On Leave" or "Half Day"
+                leave_type = leave_status[1]
+                leave_application = leave_status[2]
+            else:
+                status = "Absent"
+                leave_type = None
+                leave_application = None
+
+            # Resolve employee's shift for today
+            shift_doc = get_employee_shift(emp.name, today)
+            shift_name = shift_doc.name if shift_doc else (emp.default_shift or None)
+
+            att = frappe.get_doc({
+                "doctype": "Attendance",
+                "employee": emp.name,
+                "employee_name": emp.employee_name,
+                "attendance_date": today,
+                "company": emp.company,
+                "status": status,
+                "shift": shift_name,
+                "leave_type": leave_type,
+                "leave_application": leave_application,
+            })
+            att.flags.ignore_permissions = True
+            att.insert()
+            created.append(att.name)
+
+        except Exception:
+            frappe.log_error(
+                title="generate_daily_absent Error",
+                message=frappe.get_traceback(),
+            )
+
+    if created:
+        frappe.db.commit()
+
+    return created
