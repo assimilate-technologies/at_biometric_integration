@@ -1,0 +1,30 @@
+{
+    "doctype": "Report",
+    "name": "Attendance Regularization Summary",
+    "ref_doctype": "Attendance",
+    "report_name": "Attendance Regularization Summary",
+    "report_type": "Script Report",
+    "is_standard": "Yes",
+    "module": "At Biometric Integration",
+    "disabled": 0,
+    "roles": [
+        {
+            "role": "System Manager"
+        },
+        {
+            "role": "HR Manager"
+        },
+        {
+            "role": "HR User"
+        },
+        {
+            "role": "Projects Manager"
+        },
+        {
+            "role": "Employee"
+        },
+        {
+            "role": "Employee Self Service"
+        }
+    ]
+}
