@@ -337,6 +337,8 @@ def log_error(msg, title="Biometric Integration Error"):
 def get_attendance_settings():
     try:
         s = frappe.get_single("Attendance Settings")
+        # Read auto_submit_after_shift_hours directly from Attendance Settings
+        auto_hours = float(getattr(s, "auto_submit_after_shift_hours", 0) or 0)
         return frappe._dict({
             "enable_regularization": bool(
                 getattr(s, "enable_regularization", False)
@@ -345,19 +347,19 @@ def get_attendance_settings():
                 getattr(s, "regularization_from_hours", 0) or 0
             ),
             "regularization_to_hours": float(
-                getattr(s, "regularization_to_hours", 24) or 24
+                getattr(s, "regularization_to_hours", 0) or 0
             ),
             "min_working_hours": float(
-                getattr(s, "min_working_hours", 4) or 4
+                getattr(s, "min_working_hours", 0) or 0
             ),
             "min_working_hour_for_half_day": float(
                 getattr(s, "min_working_hour_for_half_day", 0) or 0
             ),
-            "auto_submit_hours_after_shift": float(
-                getattr(s, "auto_submit_hours_after_shift", 4) or 4
-            ),
+            # Both keys point to the same field — no hardcoded default
+            "auto_submit_after_shift_hours": auto_hours,
+            "auto_submit_hours_after_shift": auto_hours,
             "max_regularization_days": int(
-                getattr(s, "max_regularization_days", 3) or 3
+                getattr(s, "max_regularization_days", 0) or 0
             ),
         })
     except Exception as e:
@@ -366,11 +368,12 @@ def get_attendance_settings():
         return frappe._dict({
             "enable_regularization": False,
             "regularization_from_hours": 0,
-            "regularization_to_hours": 24,
-            "min_working_hours": 4,
+            "regularization_to_hours": 0,
+            "min_working_hours": 0,
             "min_working_hour_for_half_day": 0,
-            "auto_submit_hours_after_shift": 4,
-            "max_regularization_days": 3,
+            "auto_submit_after_shift_hours": 0,
+            "auto_submit_hours_after_shift": 0,
+            "max_regularization_days": 0,
         })
 
 
@@ -571,21 +574,36 @@ def get_employee_shift(employee, attendance_date):
 
 def get_shift_end_datetime(shift_doc, attendance_date):
     try:
-        if not shift_doc:
-            return get_datetime(f"{attendance_date} 18:30:00")
+        start_time = None
+        end_time = None
 
-        start_time = getattr(shift_doc, "start_time", None)
-        end_time = getattr(shift_doc, "end_time", None)
+        if shift_doc:
+            if isinstance(shift_doc, str):
+                try:
+                    shift_doc = frappe.get_doc("Shift Type", shift_doc)
+                except Exception:
+                    shift_doc = None
+
+            if shift_doc:
+                start_time = getattr(shift_doc, "start_time", None)
+                end_time = getattr(shift_doc, "end_time", None)
 
         if not end_time:
-            return get_datetime(f"{attendance_date} 18:30:00")
+            # Check any shift type in system
+            shift_types = frappe.get_all("Shift Type", fields=["name", "start_time", "end_time"], limit_page_length=1)
+            if shift_types:
+                end_time = shift_types[0].end_time
+                start_time = shift_types[0].start_time
 
-        end_dt = get_datetime(f"{attendance_date} {end_time}")
+        if not end_time:
+            end_time = "18:30:00"
+
+        end_dt = get_datetime(f"{attendance_date} {str(end_time)}")
 
         # Handle overnight shifts.
         if start_time:
             start_dt = get_datetime(
-                f"{attendance_date} {start_time}"
+                f"{attendance_date} {str(start_time)}"
             )
 
             if end_dt < start_dt:
@@ -790,19 +808,18 @@ def determine_attendance_status(
 # ------------------------------------------------
 def can_auto_submit(att_doc):
     """
-    Check whether an Attendance document is eligible for
-    auto-submission based on Attendance Settings and Shift end.
+    Check whether an Attendance document is eligible for auto-submission.
 
-    Also respects pending regularization.
+    Rule: current time >= shift_end + auto_submit_after_shift_hours
+    e.g. shift end 18:30 + 4 hours = 22:30 -> submit ALL draft Attendance
+    records for that day regardless of working_hours or status.
+
+    auto_submit_after_shift_hours is read from Attendance Settings doctype.
     """
     settings = get_attendance_settings()
 
     try:
         if att_doc.docstatus == 1:
-            return False
-
-        # Skip holidays and On Leave.
-        if att_doc.status in ("Holiday", "On Leave"):
             return False
 
         # Pending regularization prevents auto-submit.
@@ -823,35 +840,19 @@ def can_auto_submit(att_doc):
         )
 
         now = now_datetime()
+        # Read directly from Attendance Settings — no hardcoded fallback
+        auto_submit_hours = float(settings.get("auto_submit_after_shift_hours") or 0)
 
-        # Condition 1: After the configured shift-end buffer.
-        if now >= shift_end + timedelta(
-            hours=settings.auto_submit_hours_after_shift
-        ):
-            if (
-                float(att_doc.working_hours or 0)
-                >= float(settings.min_working_hours)
-                or has_approved_regularization(
-                    att_doc.employee,
-                    att_doc.attendance_date,
-                )
-            ):
-                return True
+        # Feature is disabled when field is 0
+        if not auto_submit_hours:
+            return False
 
-        # Condition 2: Regularization window expired.
-        if settings.enable_regularization:
-            if now >= shift_end + timedelta(
-                hours=settings.regularization_to_hours
-            ):
-                if (
-                    float(att_doc.working_hours or 0)
-                    >= float(settings.min_working_hours)
-                    or has_approved_regularization(
-                        att_doc.employee,
-                        att_doc.attendance_date,
-                    )
-                ):
-                    return True
+        # Condition: shift_end + auto_submit_after_shift_hours has passed
+        # e.g. shift end 18:30 + value from Attendance Settings = cutoff time
+        # At or after cutoff → submit ALL attendance records for that day
+        cutoff = shift_end + timedelta(hours=auto_submit_hours)
+        if now >= cutoff:
+            return True
 
         return False
 

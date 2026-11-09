@@ -273,94 +273,109 @@ def get_attendance_settings():
             "enable_regularization": False,
             "regularization_from_hours": 0,
             "regularization_to_hours": 24,
-            "min_working_hours": 4,
+            "min_working_hours": 0,
             "checkin_grace_start_minutes": 0,
             "checkout_grace_end_minutes": 0,
             "attendance_grace_start_mins": 0,
             "attendance_grace_end_mins": 0,
+            "auto_submit_after_shift_hours": 0,
         })
 
     return frappe._dict({
         "enable_regularization": getattr(s, "enable_regularization", False),
         "regularization_from_hours": getattr(s, "regularization_from_hours", 0),
-        "regularization_to_hours": getattr(s, "regularization_to_hours", 24),
-        "min_working_hours": getattr(s, "min_working_hours", 4),
+        "regularization_to_hours": getattr(s, "regularization_to_hours", 0),
+        "min_working_hours": getattr(s, "min_working_hours", 0),
         "checkin_grace_start_minutes": getattr(s, "checkin_grace_start_minutes", 0),
         "checkout_grace_end_minutes": getattr(s, "checkout_grace_end_minutes", 0),
         "attendance_grace_start_mins": getattr(s, "attendance_grace_start_mins", 0),
         "attendance_grace_end_mins": getattr(s, "attendance_grace_end_mins", 0),
+        "auto_submit_after_shift_hours": float(getattr(s, "auto_submit_after_shift_hours", 0) or 0),
     })
 
 
-def get_shift_end_datetime(employee, attendance_date, shift_name):
+def get_shift_end_datetime(employee, attendance_date, shift_name=None):
     """
-    Try to determine the expected shift end datetime for this employee on attendance_date.
-    - First try to read Shift Type (end_time) by name
-    - If shift_name absent or Shift Type missing, fall back to using attendance.out_time (if exists)
-    - If still missing, assume a default shift end at 18:30 (6:30pm) local date (adjustable)
+    Determine the expected shift end datetime for this employee on attendance_date.
+    Priority:
+    1. Shift passed in argument or on Attendance doc
+    2. Employee's assigned shift (Shift Assignment active for attendance_date, or Employee.default_shift)
+    3. Default/first Shift Type in the system (e.g. 'G')
+    4. Fallback 18:30:00
     """
-    # try Shift Type
-    try:
-        if shift_name:
-            # Shift Type might store times as strings or time objects; we try common fields
+    end_time = None
+    start_time = None
+
+    # 1. Try explicit shift_name
+    if shift_name:
+        try:
             shift = frappe.get_doc("Shift Type", shift_name)
             end_time = getattr(shift, "end_time", None) or getattr(shift, "end", None)
             start_time = getattr(shift, "start_time", None) or getattr(shift, "start", None)
-            if end_time:
-                # combine date + end_time
-                dt = get_datetime(f"{attendance_date} {str(end_time)}")
-                return dt
-    except Exception:
-        # no shift found, continue to fallback
-        pass
+        except Exception:
+            pass
 
-    # fallback: try to use any existing attendance out_time
-    att = frappe.get_all("Attendance",
-                         filters={"employee": employee, "attendance_date": attendance_date},
-                         fields=["out_time"], limit_page_length=1)
-    if att and att[0].get("out_time"):
-        return get_datetime(att[0].out_time)
+    # 2. Try employee shift assignment or default_shift
+    if not end_time and employee:
+        try:
+            shift_doc = get_employee_shift(employee, attendance_date)
+            if shift_doc:
+                end_time = getattr(shift_doc, "end_time", None) or getattr(shift_doc, "end", None)
+                start_time = getattr(shift_doc, "start_time", None) or getattr(shift_doc, "start", None)
+        except Exception:
+            pass
 
-    # final fallback: assume 18:30 local time
-    fallback = get_datetime(f"{attendance_date} 18:30:00")
-    return fallback
+    # 3. Try any existing Shift Type in the system (e.g. 'G')
+    if not end_time:
+        try:
+            shift_types = frappe.get_all("Shift Type", fields=["name", "start_time", "end_time"], limit_page_length=1)
+            if shift_types:
+                end_time = shift_types[0].end_time
+                start_time = shift_types[0].start_time
+        except Exception:
+            pass
+
+    # 4. Fallback default 18:30:00
+    if not end_time:
+        end_time = "18:30:00"
+
+    # Combine date + end_time
+    end_dt = get_datetime(f"{attendance_date} {str(end_time)}")
+    if start_time:
+        start_dt = get_datetime(f"{attendance_date} {str(start_time)}")
+        if end_dt < start_dt:
+            # Overnight shift: shift end is on the following day
+            end_dt += timedelta(days=1)
+
+    return end_dt
 
 
-def auto_submit_attendance_doc(att_doc, settings):
+def auto_submit_attendance_doc(att_doc, settings=None):
     """
     Submit a single attendance document if it meets submission criteria.
     Returns True if submitted.
     """
     try:
-        # Skip already submitted
-        if att_doc.docstatus == 1:
+        doc_name = att_doc.name if hasattr(att_doc, "name") else att_doc.get("name")
+        if not doc_name:
             return False
 
-        # compute working_hours if missing
-        working_hours = getattr(att_doc, "working_hours", None)
-        if working_hours is None:
-            # try to compute from in_time/out_time if available
-            if att_doc.in_time and att_doc.out_time:
-                working_hours = calculate_working_hours(att_doc.in_time, att_doc.out_time)
-            else:
-                working_hours = 0.0
-
-        # Rule: require at least min_working_hours
-        if working_hours < settings.min_working_hours:
-            # Not enough hours to be auto-submitted as Present / Half-day
+        doc = frappe.get_doc("Attendance", doc_name)
+        if doc.docstatus == 1:
             return False
 
-        # If reached here, submit
-        doc = frappe.get_doc("Attendance", att_doc.name)
-        # update working_hours and status to reflect calculation (defensive)
-        doc.working_hours = working_hours
-        # choose status based on hours (same logic you used earlier)
-        doc.status = "Present" if working_hours >= settings.min_working_hours else "Half Day"
+        # Ensure working_hours is calculated if in_time and out_time exist
+        if doc.working_hours is None and doc.in_time and doc.out_time:
+            doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
 
-        # Submit with ignore permissions to allow scheduler/whitelisted calls to submit
+        # Ensure status is preserved or set
+        if not doc.status:
+            leave_status = get_leave_status(doc.employee, doc.attendance_date)
+            holiday_flag = is_holiday(doc.employee, doc.attendance_date)
+            doc.status = determine_attendance_status(doc.working_hours or 0.0, leave_status, holiday_flag)
+
         doc.flags.ignore_permissions = True
         doc.submit()
-        frappe.db.commit()
         frappe.publish_realtime(event="attendance_auto_submitted", message={"name": doc.name})
         return True
     except Exception as e:
@@ -371,46 +386,50 @@ def auto_submit_attendance_doc(att_doc, settings):
 def auto_submit_due_attendances():
     """
     Find attendance records that are due for auto-submission and submit them.
-    Two triggers:
-    1) shift end + 4 hours have passed
-    2) regularization period ended (using regularization_to_hours from settings)
-    This function can be invoked from scheduler periodically (eg: every 30 minutes).
+
+    Trigger:
+      Current time >= (shift_end_datetime + auto_submit_after_shift_hours)
+
+    Example:
+      shift end = 18:30, auto_submit_after_shift_hours = 4  →  cutoff = 22:30
+      At 22:30 or later ALL draft Attendance records for that day are submitted.
+
+    The value of auto_submit_after_shift_hours is read directly from
+    Attendance Settings — nothing is hardcoded here.
+
+    This function is invoked from the scheduler every 10 minutes (*/10 * * * *).
     """
     settings = get_attendance_settings()
     now = now_datetime()
 
-    # query open attendance records (docstatus = 0)
+    # Read straight from Attendance Settings — no hardcoded fallback
+    auto_submit_hours = float(settings.auto_submit_after_shift_hours or 0)
+
+    # Feature is disabled when field is 0 or not configured
+    if not auto_submit_hours:
+        return []
+
+    # Query all open (draft) attendance records
     open_att = frappe.get_all("Attendance", filters={"docstatus": 0}, fields=[
-        "name", "employee", "attendance_date", "in_time", "out_time", "working_hours", "shift"
+        "name", "employee", "attendance_date", "in_time", "out_time", "working_hours", "status", "shift"
     ], limit_page_length=50000)
 
     submitted_any = []
     for a in open_att:
         try:
-            # compute expected shift end datetime
             shift_end_dt = get_shift_end_datetime(a.employee, a.attendance_date, a.get("shift"))
+            cutoff_dt = shift_end_dt + timedelta(hours=auto_submit_hours)
 
-            # condition 1: auto_submit_after_shift_hours after shift end
-            auto_submit_hours = float(settings.auto_submit_after_shift_hours or 4)
-            if now >= (shift_end_dt + timedelta(hours=auto_submit_hours)):
-                # submit if meets working hours rule
-                if (a.working_hours or 0) >= settings.min_working_hours:
-                    if auto_submit_attendance_doc(frappe._dict(a), settings):
-                        submitted_any.append(a.name)
-                    continue
+            # Once current time passes the cutoff, submit ALL records for that day
+            if now >= cutoff_dt:
+                if auto_submit_attendance_doc(frappe._dict(a), settings):
+                    submitted_any.append(a.name)
 
-            # condition 2: regularization window passed
-            if settings.enable_regularization:
-                # Interpret regularization_to_hours as hours after shift_end allowed for regularization.
-                # Once that window expires, auto-submit if working_hours >= min_working_hours.
-                reg_to = float(settings.regularization_to_hours or 0)
-                if now >= (shift_end_dt + timedelta(hours=reg_to)):
-                    if (a.working_hours or 0) >= settings.min_working_hours:
-                        if auto_submit_attendance_doc(frappe._dict(a), settings):
-                            submitted_any.append(a.name)
-                        continue
         except Exception as e:
             frappe.log_error(f"Error evaluating auto-submit for attendance {a.get('name')}: {e}", "Attendance Auto Submit")
+
+    if submitted_any:
+        frappe.db.commit()
 
     return submitted_any
 
@@ -651,38 +670,32 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
 def auto_submit_new_attendances(attendance_names):
     """
     Called after new Attendance docs are created. This checks each new attendance doc
-    and auto-submits immediately if it meets the rules (e.g. created after checkins and already
-    has enough working hours AND either shift_end+auto_submit_after_shift_hours already passed or regularization window expired).
+    and auto-submits immediately if shift_end + auto_submit_after_shift_hours has already passed.
     """
     if not attendance_names:
         return []
 
     settings = get_attendance_settings()
     submitted = []
+    # Read straight from Attendance Settings — no hardcoded fallback
+    auto_submit_hours = float(settings.auto_submit_after_shift_hours or 0)
+    if not auto_submit_hours:
+        return []
+    now = now_datetime()
+
     for name in attendance_names:
         try:
             doc = frappe.get_doc("Attendance", name)
-            # re-use the logic in auto_submit_due_attendances by wrapping doc into a dict
-            # We'll check: if now >= shift_end+auto_submit_after_shift_hours or regularization expired, submit.
+            if doc.docstatus == 1:
+                continue
+
             shift_end_dt = get_shift_end_datetime(doc.employee, doc.attendance_date, doc.shift)
-            now = now_datetime()
+            cutoff_dt = shift_end_dt + timedelta(hours=auto_submit_hours)
 
-            auto_submit_hours = float(settings.auto_submit_after_shift_hours or 4)
-            if now >= (shift_end_dt + timedelta(hours=auto_submit_hours)):
-                if (doc.working_hours or 0) >= settings.min_working_hours:
-                    doc.flags.ignore_permissions = True
-                    doc.submit()
-                    submitted.append(name)
-                    continue
-
-            if settings.enable_regularization:
-                reg_to = float(settings.regularization_to_hours or 0)
-                if now >= (shift_end_dt + timedelta(hours=reg_to)):
-                    if (doc.working_hours or 0) >= settings.min_working_hours:
-                        doc.flags.ignore_permissions = True
-                        doc.submit()
-                        submitted.append(name)
-                        continue
+            if now >= cutoff_dt:
+                doc.flags.ignore_permissions = True
+                doc.submit()
+                submitted.append(name)
         except Exception as e:
             frappe.log_error(f"Error in auto_submit_new_attendances for {name}: {e}", "Attendance Auto Submit")
 
