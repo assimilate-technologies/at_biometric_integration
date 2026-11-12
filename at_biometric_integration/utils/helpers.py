@@ -331,6 +331,34 @@ def log_error(msg, title="Biometric Integration Error"):
         frappe.logger().error(f"{title}: {msg}")
 
 
+def time_to_hours(val):
+    """Convert time (str 'HH:MM:SS', timedelta, int, or float) to decimal hours."""
+    if not val:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, timedelta):
+        return round(val.total_seconds() / 3600.0, 2)
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return 0.0
+        try:
+            return float(val)
+        except ValueError:
+            pass
+        parts = val.split(":")
+        if len(parts) >= 2:
+            try:
+                h = float(parts[0])
+                m = float(parts[1])
+                s = float(parts[2]) if len(parts) > 2 else 0.0
+                return round(h + (m / 60.0) + (s / 3600.0), 2)
+            except ValueError:
+                return 0.0
+    return 0.0
+
+
 # ------------------------------------------------
 # Attendance Settings (central)
 # ------------------------------------------------
@@ -349,11 +377,11 @@ def get_attendance_settings():
             "regularization_to_hours": float(
                 getattr(s, "regularization_to_hours", 0) or 0
             ),
-            "min_working_hours": float(
-                getattr(s, "min_working_hours", 0) or 0
+            "min_working_hours": time_to_hours(
+                getattr(s, "min_working_hours", 0)
             ),
-            "min_working_hour_for_half_day": float(
-                getattr(s, "min_working_hour_for_half_day", 0) or 0
+            "min_working_hour_for_half_day": time_to_hours(
+                getattr(s, "min_working_hour_for_half_day", 0)
             ),
             # Both keys point to the same field — no hardcoded default
             "auto_submit_after_shift_hours": auto_hours,
@@ -700,31 +728,56 @@ def has_approved_regularization(employee, attendance_date):
 # Working hours
 # ------------------------------------------------
 def calculate_working_hours_from_times(in_time, out_time):
+    """Calculate time difference between in_time and out_time as HH:MM:SS string.
+
+    Calculates gap between time of day (hours, minutes, seconds).
+    Example:
+        in_time = 09-11-2026 13:23:54
+        out_time = 09-11-2026 18:23:41
+        gap = 04:59:47 -> returns "04:59:47"
+    """
     try:
         if not in_time or not out_time:
-            return 0.0
+            return "00:00:00"
 
-        return round(
-            time_diff_in_hours(out_time, in_time),
-            2,
-        )
+        in_dt = get_datetime(in_time)
+        out_dt = get_datetime(out_time)
+
+        # Extract only the time components
+        in_t = in_dt.time()
+        out_t = out_dt.time()
+
+        # Convert time of day to total seconds from midnight
+        in_seconds = int((in_t.hour * 3600) + (in_t.minute * 60) + in_t.second)
+        out_seconds = int((out_t.hour * 3600) + (out_t.minute * 60) + out_t.second)
+
+        diff_seconds = out_seconds - in_seconds
+        # If out_time is earlier than in_time (e.g. overnight 22:00 -> 06:00)
+        if diff_seconds < 0:
+            diff_seconds += 24 * 3600
+
+        hours = diff_seconds // 3600
+        minutes = (diff_seconds % 3600) // 60
+        seconds = diff_seconds % 60
+
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     except Exception:
         log_error(
             frappe.get_traceback(),
             "calculate_working_hours_from_times",
         )
-        return 0.0
+        return "00:00:00"
 
 
 def calculate_working_hours(first_checkin, last_checkin):
-    """
-    Accepts datetime/string values or check-in objects/dicts
-    containing a 'time' key.
+    """Accepts datetime/string values or check-in objects/dicts containing 'time'.
+
+    Returns 'HH:MM:SS' string.
     """
     try:
         if not first_checkin or not last_checkin:
-            return 0.0
+            return "00:00:00"
 
         # CASE 1: datetime or string values.
         if (
@@ -761,7 +814,7 @@ def calculate_working_hours(first_checkin, last_checkin):
             frappe.get_traceback(),
             "calculate_working_hours",
         )
-        return 0.0
+        return "00:00:00"
 
 
 # ------------------------------------------------
@@ -776,13 +829,14 @@ def determine_attendance_status(
     settings = get_attendance_settings()
 
     min_h = (
-        min_hours
+        time_to_hours(min_hours)
         if min_hours is not None
-        else settings.min_working_hours
+        else time_to_hours(settings.min_working_hours)
     )
+    work_h = time_to_hours(working_hours)
 
     # Priority 1: Actual work.
-    if working_hours >= float(min_h):
+    if work_h >= float(min_h):
         return "Present"
 
     # Priority 2: Holiday.
@@ -794,13 +848,13 @@ def determine_attendance_status(
         return leave_status[0]
 
     # Priority 4: Short work or absent.
-    min_half_day = float(
+    min_half_day = time_to_hours(
         getattr(settings, "min_working_hour_for_half_day", 0) or 0
     )
-    if min_half_day and 0 < working_hours < min_half_day:
+    if min_half_day and 0 < work_h < min_half_day:
         return "Absent"
 
-    return "Half Day" if working_hours > 0 else "Absent"
+    return "Half Day" if work_h > 0 else "Absent"
 
 
 # ------------------------------------------------

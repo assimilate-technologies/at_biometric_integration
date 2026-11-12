@@ -98,3 +98,10 @@ def set_attendance_regularization_link(doc, method=None):
     regularization = get_regularization_for_attendance(doc.get("employee"), doc.get("attendance_date"))
     if regularization:
         doc.attendance_regularization = regularization
+
+
+def calculate_and_set_working_hours(doc, method=None):
+    """Attendance validate hook: calculate working_hours from in_time and out_time."""
+    if doc.get("in_time") and doc.get("out_time"):
+        from at_biometric_integration.utils.helpers import calculate_working_hours
+        doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)

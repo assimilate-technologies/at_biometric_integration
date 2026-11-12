@@ -47,7 +47,9 @@ app_license = "mit"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+    "Attendance": "public/js/attendance.js"
+}
 doctype_list_js = {
     "Employee Checkin": [
         "public/js/employee_checkin.js"
@@ -155,6 +157,18 @@ doc_events = {
         "validate": [
             "at_biometric_integration.utils.attendance_links.set_employee_checkin_link",
             "at_biometric_integration.utils.attendance_links.set_attendance_regularization_link",
+            "at_biometric_integration.utils.attendance_links.calculate_and_set_working_hours",
+        ],
+        "before_submit": [
+            "at_biometric_integration.utils.attendance_processing.check_min_working_hours_on_submit",
+        ],
+    },
+    "Employee Checkin": {
+        "after_insert": [
+            "at_biometric_integration.utils.attendance_processing.update_attendance_on_checkin",
+        ],
+        "on_trash": [
+            "at_biometric_integration.utils.attendance_processing.update_attendance_on_checkin",
         ],
     }
 }
@@ -260,9 +274,7 @@ override_doctype_dashboards = {
 scheduler_events = {
     "cron": {
         "*/5 * * * *": [
-            "at_biometric_integration.api.fetch_and_upload_attendance"
-        ],
-        "*/5 * * * *": [
+            "at_biometric_integration.api.fetch_and_upload_attendance",
             "at_biometric_integration.scheduler.run_attendance_scheduler"
         ],
         "*/10 * * * *": [
@@ -310,6 +322,7 @@ fixtures = [
 ]
 after_migrate = ["at_biometric_integration.patches.workflow_state_action.execute",
                  "at_biometric_integration.patches.create_biometric_roles_and_permissions.execute",
-                 "at_biometric_integration.patches.add_half_day_applicable_field_on_attendance_setting.execute"
+                 "at_biometric_integration.patches.add_half_day_applicable_field_on_attendance_setting.execute",
+                 "at_biometric_integration.patches.add_field_on_employee_work_type.execute"
                 ]
 

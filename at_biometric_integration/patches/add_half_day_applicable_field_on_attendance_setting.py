@@ -18,15 +18,18 @@ def execute():
     ]
 
     for field in fields:
-        existing = frappe.db.exists(
+        # Check both Custom Field and standard DocField
+        has_custom = frappe.db.exists(
             "Custom Field",
             {
                 "dt": "Attendance Settings",
                 "fieldname": field["fieldname"],
             },
         )
+        meta = frappe.get_meta("Attendance Settings")
+        has_docfield = meta.has_field(field["fieldname"])
 
-        if existing:
+        if has_custom or has_docfield:
             print(f"Skipping existing field: {field['fieldname']}")
             continue
 

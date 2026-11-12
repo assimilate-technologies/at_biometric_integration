@@ -249,7 +249,7 @@ from datetime import datetime, timedelta
 from frappe.utils import get_datetime, now_datetime, getdate, add_days
 
 # helpers expected to exist in your repo (you referenced them before)
-from .helpers import get_leave_status, is_holiday, calculate_working_hours, determine_attendance_status, get_employee_shift
+from .helpers import get_leave_status, is_holiday, calculate_working_hours, determine_attendance_status, get_employee_shift, time_to_hours
 from .attendance_links import pick_checkin
 
 # ------------------
@@ -285,7 +285,7 @@ def get_attendance_settings():
         "enable_regularization": getattr(s, "enable_regularization", False),
         "regularization_from_hours": getattr(s, "regularization_from_hours", 0),
         "regularization_to_hours": getattr(s, "regularization_to_hours", 0),
-        "min_working_hours": getattr(s, "min_working_hours", 0),
+        "min_working_hours": time_to_hours(getattr(s, "min_working_hours", 0)),
         "checkin_grace_start_minutes": getattr(s, "checkin_grace_start_minutes", 0),
         "checkout_grace_end_minutes": getattr(s, "checkout_grace_end_minutes", 0),
         "attendance_grace_start_mins": getattr(s, "attendance_grace_start_mins", 0),
@@ -300,8 +300,7 @@ def get_shift_end_datetime(employee, attendance_date, shift_name=None):
     Priority:
     1. Shift passed in argument or on Attendance doc
     2. Employee's assigned shift (Shift Assignment active for attendance_date, or Employee.default_shift)
-    3. Default/first Shift Type in the system (e.g. 'G')
-    4. Fallback 18:30:00
+    3. Fallback 18:30:00
     """
     end_time = None
     start_time = None
@@ -325,17 +324,7 @@ def get_shift_end_datetime(employee, attendance_date, shift_name=None):
         except Exception:
             pass
 
-    # 3. Try any existing Shift Type in the system (e.g. 'G')
-    if not end_time:
-        try:
-            shift_types = frappe.get_all("Shift Type", fields=["name", "start_time", "end_time"], limit_page_length=1)
-            if shift_types:
-                end_time = shift_types[0].end_time
-                start_time = shift_types[0].start_time
-        except Exception:
-            pass
-
-    # 4. Fallback default 18:30:00
+    # 3. Fallback default 18:30:00
     if not end_time:
         end_time = "18:30:00"
 
@@ -348,6 +337,186 @@ def get_shift_end_datetime(employee, attendance_date, shift_name=None):
             end_dt += timedelta(days=1)
 
     return end_dt
+
+
+def get_working_hours_seconds(val):
+    """Convert working_hours (str 'HH:MM:SS', timedelta, time, float) to total seconds."""
+    if not val:
+        return 0
+    if isinstance(val, timedelta):
+        return int(val.total_seconds())
+    if hasattr(val, "hour") and hasattr(val, "minute"):
+        return val.hour * 3600 + val.minute * 60 + getattr(val, "second", 0)
+    if isinstance(val, (int, float)):
+        return int(float(val) * 3600)
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return 0
+        parts = val.split(":")
+        if len(parts) >= 2:
+            try:
+                h = int(float(parts[0]))
+                m = int(float(parts[1]))
+                s = int(float(parts[2])) if len(parts) > 2 else 0
+                return h * 3600 + m * 60 + s
+            except ValueError:
+                return 0
+        try:
+            return int(float(val) * 3600)
+        except ValueError:
+            return 0
+    return 0
+
+
+def update_attendance_on_checkin(doc, method=None):
+    """
+    Live Attendance Updater:
+    Triggered immediately when an Employee Checkin is inserted or deleted.
+    Instantly recalculates and updates in_time, out_time, and working_hours on Attendance
+    for that specific employee and date without waiting for the batch scheduler.
+    """
+    if not doc.get("employee") or not doc.get("time"):
+        return
+
+    try:
+        employee = doc.employee
+        checkin_date = getdate(doc.time)
+
+        # Get all checkins for this employee on this date
+        checkins = frappe.get_all(
+            "Employee Checkin",
+            filters={
+                "employee": employee,
+                "time": ["between", [f"{checkin_date} 00:00:00", f"{checkin_date} 23:59:59"]]
+            },
+            fields=["name", "time", "log_type"],
+            order_by="time asc",
+            limit_page_length=500
+        )
+
+        in_punches = []
+        out_punches = []
+        all_punches = []
+
+        for c in checkins:
+            t = c.get("time")
+            if not t:
+                continue
+            dt = get_datetime(t)
+            all_punches.append(dt)
+            ltype = (c.get("log_type") or "").strip().upper()
+            if ltype == "IN":
+                in_punches.append(dt)
+            elif ltype == "OUT":
+                out_punches.append(dt)
+
+        first_time = min(in_punches) if in_punches else (min(all_punches) if all_punches else None)
+        last_time = max(out_punches) if out_punches else (max(all_punches) if all_punches else None)
+
+        hours = "00:00:00"
+        if first_time and last_time and first_time != last_time:
+            hours = calculate_working_hours(first_time, last_time)
+
+        leave_status = get_leave_status(employee, checkin_date)
+        holiday_flag = is_holiday(employee, checkin_date)
+        status = determine_attendance_status(hours, leave_status, holiday_flag)
+
+        existing_draft = frappe.db.get_value(
+            "Attendance",
+            {"employee": employee, "attendance_date": checkin_date, "docstatus": 0},
+            "name"
+        )
+        existing_submitted = frappe.db.get_value(
+            "Attendance",
+            {"employee": employee, "attendance_date": checkin_date, "docstatus": 1},
+            "name"
+        )
+
+        if existing_draft:
+            update_data = {
+                "in_time": first_time,
+                "out_time": last_time,
+                "working_hours": hours,
+            }
+            if status != "Holiday":
+                update_data["status"] = status
+
+            if checkins:
+                first_chk = pick_checkin(checkins, attendance_name=existing_draft, in_time=first_time)
+                if first_chk:
+                    update_data["employee_checkin"] = first_chk
+
+            frappe.db.set_value("Attendance", existing_draft, update_data, update_modified=True)
+
+            for c in checkins:
+                frappe.db.set_value("Employee Checkin", c.name, "attendance", existing_draft, update_modified=False)
+
+        elif existing_submitted:
+            update_data = {}
+            if first_time:
+                update_data["in_time"] = first_time
+            if last_time:
+                update_data["out_time"] = last_time
+            if hours:
+                update_data["working_hours"] = hours
+
+            if update_data:
+                frappe.db.set_value("Attendance", existing_submitted, update_data, update_modified=False)
+        else:
+            shift_doc = get_employee_shift(employee, checkin_date)
+            shift_name = shift_doc.name if shift_doc else frappe.db.get_value("Employee", employee, "default_shift")
+            company = frappe.db.get_value("Employee", employee, "company")
+            emp_name = frappe.db.get_value("Employee", employee, "employee_name")
+
+            doc_args = {
+                "doctype": "Attendance",
+                "employee": employee,
+                "employee_name": emp_name,
+                "attendance_date": checkin_date,
+                "company": company,
+                "shift": shift_name,
+                "in_time": first_time,
+                "out_time": last_time,
+                "working_hours": hours,
+                "status": "Absent" if status == "Holiday" else status,
+            }
+            if leave_status and leave_status[0]:
+                doc_args["leave_type"] = leave_status[1]
+                doc_args["leave_application"] = leave_status[2]
+
+            new_att = frappe.get_doc(doc_args)
+            new_att.flags.ignore_permissions = True
+            new_att.insert()
+
+            for c in checkins:
+                frappe.db.set_value("Employee Checkin", c.name, "attendance", new_att.name, update_modified=False)
+
+    except Exception:
+        frappe.log_error(title=f"Live Attendance Update Error: {doc.get('employee')}", message=frappe.get_traceback())
+
+
+def check_min_working_hours_on_submit(doc, method=None):
+    """
+    Validation on Attendance submit:
+    Check if 'working_hours' < 8:45:00 (31,500 seconds) -> update status = 'Work From Home'.
+    (Approved leaves with leave application are preserved).
+    """
+    # Do not override approved leave applications
+    if doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")):
+        return
+
+    # Calculate working_hours from in_time and out_time if available
+    if doc.get("in_time") and doc.get("out_time") and (not doc.get("working_hours") or doc.get("working_hours") == "00:00:00"):
+        doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
+
+    work_seconds = get_working_hours_seconds(doc.get("working_hours"))
+    REQUIRED_SECONDS = 8 * 3600 + 45 * 60  # 8:45:00 = 31,500 seconds
+
+    if work_seconds < REQUIRED_SECONDS:
+        doc.status = "Work From Home"
+    elif doc.status not in ["Present", "On Leave", "Work From Home"]:
+        doc.status = "Present"
 
 
 def auto_submit_attendance_doc(att_doc, settings=None):
@@ -364,22 +533,62 @@ def auto_submit_attendance_doc(att_doc, settings=None):
         if doc.docstatus == 1:
             return False
 
-        # Ensure working_hours is calculated if in_time and out_time exist
-        if doc.working_hours is None and doc.in_time and doc.out_time:
-            doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
+        # 1. Skip Holiday status - Frappe HRMS Attendance does not allow 'Holiday' status
+        if doc.status == "Holiday":
+            return False
 
-        # Ensure status is preserved or set
-        if not doc.status:
-            leave_status = get_leave_status(doc.employee, doc.attendance_date)
-            holiday_flag = is_holiday(doc.employee, doc.attendance_date)
-            doc.status = determine_attendance_status(doc.working_hours or 0.0, leave_status, holiday_flag)
+        # Note: Do not wait for Attendance Regularization - submit immediately per policy
+
+        # 2. Check for duplicates: if another submitted attendance exists, don't throw DuplicateAttendanceError
+        duplicate_submitted = frappe.db.get_value(
+            "Attendance",
+            {
+                "employee": doc.employee,
+                "attendance_date": doc.attendance_date,
+                "docstatus": 1,
+                "name": ["!=", doc.name]
+            },
+            "name"
+        )
+        if duplicate_submitted:
+            frappe.logger().info(f"Duplicate submitted attendance {duplicate_submitted} already exists for {doc.employee} on {doc.attendance_date}. Skipping draft {doc.name}.")
+            return False
+
+        # 3. Ensure working_hours is formatted properly if in_time and out_time exist
+        if doc.in_time and doc.out_time:
+            doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
+        elif not doc.working_hours:
+            doc.working_hours = "00:00:00"
+
+        # 4. Check if working_hours < 8:45:00 -> update status = 'Work From Home'
+        is_on_leave = (doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")))
+        if not is_on_leave:
+            work_seconds = get_working_hours_seconds(doc.working_hours)
+            REQUIRED_SECONDS = 8 * 3600 + 45 * 60  # 8:45:00 = 31,500 seconds
+            if work_seconds < REQUIRED_SECONDS:
+                doc.status = "Work From Home"
+            else:
+                doc.status = "Present"
+
+        # 5. Standard Frappe HRMS status validation check before submitting
+        valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
+        if doc.status not in valid_statuses:
+            doc.status = "Work From Home"
+
+        # 6. Check employee status
+        emp_status = frappe.db.get_value("Employee", doc.employee, "status")
+        if emp_status != "Active":
+            return False
 
         doc.flags.ignore_permissions = True
         doc.submit()
         frappe.publish_realtime(event="attendance_auto_submitted", message={"name": doc.name})
         return True
     except Exception as e:
-        frappe.log_error(f"Auto-submit error for {getattr(att_doc, 'name', '')}: {e}", "Attendance Auto Submit")
+        frappe.log_error(
+            title=f"Attendance Auto Submit Error: {getattr(att_doc, 'name', '')}",
+            message=frappe.get_traceback()
+        )
         return False
 
 
@@ -409,8 +618,8 @@ def auto_submit_due_attendances():
     if not auto_submit_hours:
         return []
 
-    # Query all open (draft) attendance records
-    open_att = frappe.get_all("Attendance", filters={"docstatus": 0}, fields=[
+    # Query all open (draft) attendance records excluding Holiday status
+    open_att = frappe.get_all("Attendance", filters={"docstatus": 0, "status": ["!=", "Holiday"]}, fields=[
         "name", "employee", "attendance_date", "in_time", "out_time", "working_hours", "status", "shift"
     ], limit_page_length=50000)
 
@@ -426,7 +635,10 @@ def auto_submit_due_attendances():
                     submitted_any.append(a.name)
 
         except Exception as e:
-            frappe.log_error(f"Error evaluating auto-submit for attendance {a.get('name')}: {e}", "Attendance Auto Submit")
+            frappe.log_error(
+                title=f"Error evaluating auto-submit for attendance {a.get('name')}",
+                message=frappe.get_traceback()
+            )
 
     if submitted_any:
         frappe.db.commit()
@@ -519,7 +731,7 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
     while curr_date <= to_date:
         daily = by_date.get(curr_date, [])
         
-        hours = 0.0
+        hours = "00:00:00"
         first_time = None
         last_time = None
         
@@ -677,7 +889,6 @@ def auto_submit_new_attendances(attendance_names):
 
     settings = get_attendance_settings()
     submitted = []
-    # Read straight from Attendance Settings — no hardcoded fallback
     auto_submit_hours = float(settings.auto_submit_after_shift_hours or 0)
     if not auto_submit_hours:
         return []
@@ -693,11 +904,10 @@ def auto_submit_new_attendances(attendance_names):
             cutoff_dt = shift_end_dt + timedelta(hours=auto_submit_hours)
 
             if now >= cutoff_dt:
-                doc.flags.ignore_permissions = True
-                doc.submit()
-                submitted.append(name)
+                if auto_submit_attendance_doc(doc, settings):
+                    submitted.append(name)
         except Exception as e:
-            frappe.log_error(f"Error in auto_submit_new_attendances for {name}: {e}", "Attendance Auto Submit")
+            frappe.log_error(title=f"Error in auto_submit_new_attendances for {name}", message=frappe.get_traceback())
 
     if submitted:
         frappe.db.commit()
@@ -713,7 +923,8 @@ def generate_daily_absent():
     Creates a draft Attendance record with status = 'Absent' for every
     Active employee that does NOT already have an Attendance record for today.
 
-    Holiday / On Leave employees get their corresponding status instead of Absent.
+    On Leave employees get their corresponding status.
+    Holidays are skipped as holidays do not use Attendance records in Frappe HRMS.
     """
     today = getdate()
 
@@ -734,15 +945,13 @@ def generate_daily_absent():
             ):
                 continue
 
-            # Determine actual status (Holiday / On Leave / Absent)
-            holiday_flag = is_holiday(emp.name, today)
+            # Skip holidays (Frappe HRMS uses Holiday List, 'Holiday' is not a valid Attendance status)
+            if is_holiday(emp.name, today):
+                continue
+
             leave_status = get_leave_status(emp.name, today)
 
-            if holiday_flag:
-                status = "Holiday"
-                leave_type = None
-                leave_application = None
-            elif leave_status and leave_status[0]:
+            if leave_status and leave_status[0]:
                 status = leave_status[0]       # "On Leave" or "Half Day"
                 leave_type = leave_status[1]
                 leave_application = leave_status[2]
