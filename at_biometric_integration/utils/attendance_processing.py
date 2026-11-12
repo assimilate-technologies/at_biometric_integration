@@ -498,25 +498,25 @@ def update_attendance_on_checkin(doc, method=None):
 
 def check_min_working_hours_on_submit(doc, method=None):
     """
-    Validation on Attendance submit:
-    Check if 'working_hours' < 8:45:00 (31,500 seconds) -> update status = 'Work From Home'.
-    (Approved leaves with leave application are preserved).
+    before_submit hook on Attendance.
+    Only rule applied:
+      working_hours < 5:00:00  → status = 'Half Day'
+    All other statuses are left unchanged.
+    Approved Leave records are preserved as-is.
     """
-    # Do not override approved leave applications
+    # Preserve approved leave applications
     if doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")):
         return
 
-    # Calculate working_hours from in_time and out_time if available
+    # Recalculate working_hours if missing
     if doc.get("in_time") and doc.get("out_time") and (not doc.get("working_hours") or doc.get("working_hours") == "00:00:00"):
         doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
 
     work_seconds = get_working_hours_seconds(doc.get("working_hours"))
-    REQUIRED_SECONDS = 8 * 3600 + 45 * 60  # 8:45:00 = 31,500 seconds
+    HALF_DAY_SECONDS = 5 * 3600  # 5:00:00
 
-    if work_seconds < REQUIRED_SECONDS:
-        doc.status = "Work From Home"
-    elif doc.status not in ["Present", "On Leave", "Work From Home"]:
-        doc.status = "Present"
+    if work_seconds < HALF_DAY_SECONDS:
+        doc.status = "Half Day"
 
 
 def auto_submit_attendance_doc(att_doc, settings=None):
@@ -554,26 +554,25 @@ def auto_submit_attendance_doc(att_doc, settings=None):
             frappe.logger().info(f"Duplicate submitted attendance {duplicate_submitted} already exists for {doc.employee} on {doc.attendance_date}. Skipping draft {doc.name}.")
             return False
 
-        # 3. Ensure working_hours is formatted properly if in_time and out_time exist
+        # 3. Ensure working_hours is calculated if in_time and out_time exist
         if doc.in_time and doc.out_time:
             doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
         elif not doc.working_hours:
             doc.working_hours = "00:00:00"
 
-        # 4. Check if working_hours < 8:45:00 -> update status = 'Work From Home'
+        # 4. Only rule: working_hours < 5:00:00 → status = 'Half Day'
+        #    All other statuses are left as-is (preserve On Leave, Present, Absent, etc.)
         is_on_leave = (doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")))
         if not is_on_leave:
             work_seconds = get_working_hours_seconds(doc.working_hours)
-            REQUIRED_SECONDS = 8 * 3600 + 45 * 60  # 8:45:00 = 31,500 seconds
-            if work_seconds < REQUIRED_SECONDS:
-                doc.status = "Work From Home"
-            else:
-                doc.status = "Present"
+            HALF_DAY_SECONDS = 5 * 3600  # 5:00:00
+            if work_seconds < HALF_DAY_SECONDS:
+                doc.status = "Half Day"
 
-        # 5. Standard Frappe HRMS status validation check before submitting
+        # 5. Final safety check — Frappe HRMS valid statuses
         valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
         if doc.status not in valid_statuses:
-            doc.status = "Work From Home"
+            doc.status = "Absent"
 
         # 6. Check employee status
         emp_status = frappe.db.get_value("Employee", doc.employee, "status")
