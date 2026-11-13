@@ -48,7 +48,8 @@ app_license = "mit"
 
 # include js in doctype views
 doctype_js = {
-    "Attendance": "public/js/attendance.js"
+    "Attendance": "public/js/attendance.js",
+    "Employee Checkin": "public/js/employee_checkin_form.js"
 }
 doctype_list_js = {
     "Employee Checkin": [
@@ -164,11 +165,19 @@ doc_events = {
         ],
     },
     "Employee Checkin": {
+        "validate": [
+            "at_biometric_integration.utils.attendance_processing.validate_employee_checkin_wfh",
+        ],
         "after_insert": [
             "at_biometric_integration.utils.attendance_processing.update_attendance_on_checkin",
         ],
         "on_trash": [
             "at_biometric_integration.utils.attendance_processing.update_attendance_on_checkin",
+        ],
+    },
+    "Employee": {
+        "after_insert": [
+            "at_biometric_integration.utils.attendance_processing.create_attendance_for_new_employee",
         ],
     }
 }
@@ -323,6 +332,7 @@ fixtures = [
 after_migrate = ["at_biometric_integration.patches.workflow_state_action.execute",
                  "at_biometric_integration.patches.create_biometric_roles_and_permissions.execute",
                  "at_biometric_integration.patches.add_half_day_applicable_field_on_attendance_setting.execute",
-                 "at_biometric_integration.patches.add_field_on_employee_work_type.execute"
+                 "at_biometric_integration.patches.add_field_on_employee_work_type.execute",
+                 "at_biometric_integration.patches.add_employee_checkin_link.execute"
                 ]
 

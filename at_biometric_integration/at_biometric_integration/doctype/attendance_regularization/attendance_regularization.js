@@ -20,7 +20,25 @@ frappe.ui.form.on("Attendance Regularization", {
 
     refresh: async function (frm) {
         apply_read_only_rules(frm);
+        // Sync checkbox to match persisted attendance_status on load
+        if (frm.doc.attendance_status === "Work From Home" && !frm.doc.is_work_from_home) {
+            frm.set_value("is_work_from_home", 1);
+        }
+        toggle_time_mandatory(frm);
         if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
+    },
+
+    // 'attendance_status' is now read-only (auto-calculated) — no manual trigger needed.
+    // Use 'is_work_from_home' checkbox to toggle WFH status.
+    is_work_from_home: function (frm) {
+        if (frm.doc.is_work_from_home) {
+            // User checked WFH → force status to Work From Home
+            frm.set_value("attendance_status", "Work From Home");
+        } else {
+            // User unchecked WFH → recalculate from times
+            update_attendance_status_from_times(frm);
+        }
+        toggle_time_mandatory(frm);
     },
 
     employee: async function (frm) {
@@ -31,7 +49,40 @@ frappe.ui.form.on("Attendance Regularization", {
         if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
     },
 
+    in_time: function (frm) {
+        if (!frm.doc.is_work_from_home) {
+            update_attendance_status_from_times(frm);
+        }
+    },
+
+    out_time: function (frm) {
+        if (!frm.doc.is_work_from_home) {
+            update_attendance_status_from_times(frm);
+        }
+    },
+
+    before_save: function (frm) {
+        if (!frm.doc.is_work_from_home) {
+            update_attendance_status_from_times(frm);
+        }
+    },
+
     validate(frm) {
+        toggle_time_mandatory(frm);
+
+        if (!frm.doc.is_work_from_home) {
+            update_attendance_status_from_times(frm);
+            if (!frm.doc.in_time || !frm.doc.out_time) {
+                frappe.validated = false;
+                frappe.msgprint({
+                    title: __("Missing Mandatory Fields"),
+                    message: __("In Time and Out Time are mandatory when Attendance Status is not Work From Home."),
+                    indicator: "red"
+                });
+                return;
+            }
+        }
+
         // Block saving when limit reached
         if (frm.doc.__disable_save_by_limit) {
             frappe.validated = false;
@@ -48,7 +99,56 @@ frappe.ui.form.on("Attendance Regularization", {
 // -------------------- Combined Flow (Checkins → Limit Check) --------------------
 async function handle_full_flow(frm) {
     await fetch_system_checkin_times(frm);
+    if (!frm.doc.is_work_from_home) {
+        update_attendance_status_from_times(frm);
+    }
     await check_employee_monthly_limit(frm);
+}
+
+// -------------------- Toggle In/Out Time Mandatory Based on WFH --------------------
+function toggle_time_mandatory(frm) {
+    const is_wfh = frm.doc.is_work_from_home ? true : (frm.doc.attendance_status === "Work From Home");
+    frm.set_df_property("in_time", "reqd", is_wfh ? 0 : 1);
+    frm.set_df_property("out_time", "reqd", is_wfh ? 0 : 1);
+}
+
+// -------------------- Auto-update Attendance Status from Times --------------------
+function update_attendance_status_from_times(frm) {
+    if (frm.doc.is_work_from_home) return;
+    if (!frm.doc.in_time || !frm.doc.out_time) return;
+
+    function parse_to_seconds(t) {
+        if (!t) return 0;
+        const parts = String(t).trim().split(":");
+        const h = parseInt(parts[0], 10) || 0;
+        const m = parseInt(parts[1], 10) || 0;
+        const s = parseInt(parts[2], 10) || 0;
+        return h * 3600 + m * 60 + s;
+    }
+
+    const in_sec = parse_to_seconds(frm.doc.in_time);
+    const out_sec = parse_to_seconds(frm.doc.out_time);
+
+    let diff = out_sec - in_sec;
+    if (diff < 0) {
+        diff += 24 * 3600;
+    }
+
+    const FIVE_HOURS = 5 * 3600;                 // 18,000 seconds (5:00:00)
+    const EIGHT_FORTY_FIVE = 8 * 3600 + 45 * 60; // 31,500 seconds (8:45:00)
+
+    let status = "Present";
+    if (diff < FIVE_HOURS) {
+        status = "Absent";
+    } else if (diff < EIGHT_FORTY_FIVE) {
+        status = "Half Day";
+    } else {
+        status = "Present";
+    }
+
+    if (frm.doc.attendance_status !== status) {
+        frm.set_value("attendance_status", status);
+    }
 }
 
 
@@ -56,6 +156,10 @@ async function handle_full_flow(frm) {
 function apply_read_only_rules(frm) {
     const read_only_states = ["Approved By HR", "Rejected By HR"];
     const read_only = read_only_states.includes(frm.doc.workflow_state);
+
+    // attendance_status is ALWAYS read-only — it is auto-calculated from in/out times.
+    // Use the 'Work From Home' checkbox to set WFH status manually.
+    frm.set_df_property("attendance_status", "read_only", 1);
 
     frm.set_df_property("in_time", "read_only", read_only);
     frm.set_df_property("out_time", "read_only", read_only);
@@ -195,10 +299,8 @@ async function fetch_system_checkin_times(frm) {
         sync_readonly(frm, "system_in_time", in_val);
         sync_readonly(frm, "system_out_time", out_val);
 
-        // in_time / out_time are user-entered values: filling a missing one is
-        // a genuine change, so it must keep the normal dirty behaviour.
-        if (in_val && !frm.doc.in_time) frm.set_value("in_time", in_val);
-        if (out_val && !frm.doc.out_time) frm.set_value("out_time", out_val);
+        // in_time / out_time are intentionally NOT auto-filled.
+        // The user must enter them manually.
 
     } catch (err) {
         console.error("Checkin Fetch Error:", err);

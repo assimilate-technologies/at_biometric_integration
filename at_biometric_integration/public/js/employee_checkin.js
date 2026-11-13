@@ -3,10 +3,120 @@
 // Integrated with at_biometric_integration.api
 // ======================================================================
 
+// Helper: inject CSS style to prevent "+ Add Employee Checkin" button flicker
+function ensure_wfh_style() {
+    if (!document.getElementById('wfh-hide-add-checkin-style')) {
+        const style = document.createElement('style');
+        style.id = 'wfh-hide-add-checkin-style';
+        style.innerHTML = `
+            body.no-add-checkin [data-page-route="Employee Checkin"] .primary-action,
+            body.no-add-checkin [data-page-route="Employee Checkin"] [data-label="Add%20Employee%20Checkin"],
+            body.no-add-checkin [data-page-route="Employee Checkin"] button[data-label="Add%20Employee%20Checkin"],
+            body.no-add-checkin .layout-main-section[data-doctype="Employee Checkin"] .primary-action {
+                display: none !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+function hide_add_checkin_button(listview) {
+    ensure_wfh_style();
+    document.body.classList.add('no-add-checkin');
+
+    if (!listview) return;
+    listview.can_create = false;
+
+    if (listview.page) {
+        if (listview.page.btn_primary) {
+            listview.page.btn_primary.hide();
+        }
+        listview.page.clear_primary_action();
+        listview.page.wrapper.find('.primary-action').hide();
+        listview.page.wrapper.find('[data-label="Add%20Employee%20Checkin"]').hide();
+        listview.page.wrapper.find('button.btn-primary').filter(function () {
+            const txt = $(this).text().trim().toLowerCase();
+            return txt.includes('employee checkin') || txt.includes('add');
+        }).hide();
+    }
+}
+
+function show_add_checkin_button(listview) {
+    document.body.classList.remove('no-add-checkin');
+
+    if (!listview) return;
+    listview.can_create = true;
+
+    if (listview.page) {
+        if (listview.page.btn_primary) {
+            listview.page.btn_primary.show();
+        }
+        listview.page.wrapper.find('.primary-action').show();
+        listview.page.wrapper.find('[data-label="Add%20Employee%20Checkin"]').show();
+    }
+}
+
+function manage_add_checkin_button(listview) {
+    ensure_wfh_style();
+
+    // Administrator user is always allowed to see 'Add Employee Checkin'
+    if (frappe.session.user === "Administrator") {
+        show_add_checkin_button(listview);
+        return;
+    }
+
+    // Use cached status if already verified in this session
+    if (frappe._can_add_employee_checkin !== undefined) {
+        if (frappe._can_add_employee_checkin) {
+            show_add_checkin_button(listview);
+        } else {
+            hide_add_checkin_button(listview);
+        }
+        return;
+    }
+
+    // Default to hidden while verifying
+    hide_add_checkin_button(listview);
+
+    // Check login user's linked Employee custom_work_type
+    frappe.call({
+        method: "at_biometric_integration.utils.attendance_processing.check_user_wfh_status",
+        callback: function (r) {
+            const status = r && r.message;
+            const can_add = !!(status && status.can_add);
+            frappe._can_add_employee_checkin = can_add;
+
+            if (can_add) {
+                show_add_checkin_button(listview);
+            } else {
+                hide_add_checkin_button(listview);
+            }
+        },
+        error: function () {
+            // Fallback via frappe.db.get_value
+            frappe.db.get_value('Employee', { 'user_id': frappe.session.user }, ['name', 'custom_work_type'])
+                .then(res => {
+                    const emp = res && res.message ? res.message : null;
+                    const work_type = emp ? (emp.custom_work_type || '').trim().toLowerCase() : '';
+                    const can_add = (work_type === 'work from home');
+                    frappe._can_add_employee_checkin = can_add;
+
+                    if (can_add) {
+                        show_add_checkin_button(listview);
+                    } else {
+                        hide_add_checkin_button(listview);
+                    }
+                });
+        }
+    });
+}
+
 frappe.listview_settings['Employee Checkin'] = {
     onload: function (listview) {
+        // Manage "Add Employee Checkin" button visibility based on custom_work_type = 'Work From Home'
+        manage_add_checkin_button(listview);
+
         // Allow only authorized roles, Allow Administrator always
-         
         if (frappe.session.user !== "Administrator") {
             // Allow only authorized roles
             const allowed_roles = [
@@ -100,6 +210,9 @@ frappe.listview_settings['Employee Checkin'] = {
                 $input.click();
             }, "Tools");
         });
+    },
+    refresh: function (listview) {
+        manage_add_checkin_button(listview);
     }
 };
 

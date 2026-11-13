@@ -822,39 +822,39 @@ def calculate_working_hours(first_checkin, last_checkin):
 # ------------------------------------------------
 def determine_attendance_status(
     working_hours,
-    leave_status,
-    is_holiday_flag,
+    leave_status=None,
+    is_holiday_flag=False,
     min_hours=None,
+    in_time=None,
+    out_time=None,
 ):
-    settings = get_attendance_settings()
-
-    min_h = (
-        time_to_hours(min_hours)
-        if min_hours is not None
-        else time_to_hours(settings.min_working_hours)
-    )
-    work_h = time_to_hours(working_hours)
-
-    # Priority 1: Actual work.
-    if work_h >= float(min_h):
-        return "Present"
-
-    # Priority 2: Holiday.
+    # Priority 1: Holiday
     if is_holiday_flag:
         return "Holiday"
 
-    # Priority 3: Leave.
+    # Priority 2: Leave
     if leave_status and leave_status[0]:
         return leave_status[0]
 
-    # Priority 4: Short work or absent.
-    min_half_day = time_to_hours(
-        getattr(settings, "min_working_hour_for_half_day", 0) or 0
-    )
-    if min_half_day and 0 < work_h < min_half_day:
-        return "Absent"
+    # Priority 3: If in_time or out_time not present -> Absent
+    if in_time is not None or out_time is not None:
+        if not in_time or not out_time:
+            return "Absent"
 
-    return "Half Day" if work_h > 0 else "Absent"
+    # Priority 4: Working hours rules:
+    #   < 5 hr         → 'Absent'
+    #   5 to 8.44 hr   → 'Half Day'
+    #   >= 8:45 hr     → 'Present'
+    work_h = time_to_hours(working_hours)
+    FIVE_HOURS = 5.0
+    EIGHT_FORTY_FIVE = 8.75  # 8 hours 45 mins
+
+    if work_h < FIVE_HOURS:
+        return "Absent"
+    elif work_h < EIGHT_FORTY_FIVE:
+        return "Half Day"
+    else:
+        return "Present"
 
 
 # ------------------------------------------------

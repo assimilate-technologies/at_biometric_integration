@@ -216,18 +216,79 @@ from at_biometric_integration.utils.helpers import (
 
 class AttendanceRegularization(Document):
 
+    def before_save(self):
+        self.calculate_and_set_attendance_status()
+
+    def calculate_and_set_attendance_status(self):
+        """
+        Calculate hours between in_time and out_time:
+          - < 5 hr         -> 'Absent'
+          - 5 to 8:45 hr   -> 'Half Day'
+          - >= 8:45 hr     -> 'Present'
+        Preserves 'Work From Home' when is_work_from_home checkbox is ticked.
+        """
+        if self.is_work_from_home:
+            self.attendance_status = "Work From Home"
+            return
+
+        if not self.in_time or not self.out_time:
+            return
+
+        def parse_time_string(value):
+            s = str(value).strip()
+            for fmt in ("%H:%M:%S.%f", "%H:%M:%S", "%H:%M"):
+                try:
+                    return datetime.strptime(s, fmt)
+                except ValueError:
+                    continue
+            return None
+
+        def to_seconds(value):
+            if isinstance(value, timedelta):
+                return value.total_seconds()
+            if isinstance(value, (datetime, time)):
+                return value.hour * 3600 + value.minute * 60 + value.second
+            if isinstance(value, str):
+                pt = parse_time_string(value)
+                if pt:
+                    return pt.hour * 3600 + pt.minute * 60 + pt.second
+            return 0
+
+        in_sec = to_seconds(self.in_time)
+        out_sec = to_seconds(self.out_time)
+
+        if in_sec and out_sec:
+            diff = out_sec - in_sec
+            if diff < 0:
+                diff += 24 * 3600
+
+            FIVE_HOURS = 5 * 3600                     # 18,000 seconds (5:00:00)
+            EIGHT_FORTY_FIVE = 8 * 3600 + 45 * 60     # 31,500 seconds (8:45:00)
+
+            if diff < FIVE_HOURS:
+                self.attendance_status = "Absent"
+            elif diff < EIGHT_FORTY_FIVE:
+                self.attendance_status = "Half Day"
+            else:
+                self.attendance_status = "Present"
+
     def validate(self):
         """
         Validate:
         1. In Time is earlier than Out Time.
-        2. No duplicate Attendance Regularization exists for same employee + date.
-        3. The regularization is being created within the allowed time window
+        2. Set attendance_status based on duration between in_time and out_time.
+        3. No duplicate Attendance Regularization exists for same employee + date.
+        4. The regularization is being created within the allowed time window
            (regularization_from_hours after shift start  →
             regularization_to_hours after shift end) defined in Attendance Settings.
         """
+        self.calculate_and_set_attendance_status()
 
-        if not self.in_time or not self.out_time:
-            return
+        if not self.is_work_from_home:
+            if not self.in_time or not self.out_time:
+                frappe.throw(
+                    frappe._("In Time and Out Time are mandatory when Attendance Status is not Work From Home.")
+                )
 
         def parse_time_string(value):
             """Parse a time string that may be HH:MM, HH:MM:SS, or HH:MM:SS.ffffff."""
@@ -276,13 +337,14 @@ class AttendanceRegularization(Document):
                 f"Unsupported time format: {value}"
             )
 
-        in_seconds = convert_to_seconds(self.in_time)
-        out_seconds = convert_to_seconds(self.out_time)
+        if self.in_time and self.out_time:
+            in_seconds = convert_to_seconds(self.in_time)
+            out_seconds = convert_to_seconds(self.out_time)
 
-        if in_seconds >= out_seconds:
-            frappe.throw(
-                "In Time must be before Out Time."
-            )
+            if in_seconds >= out_seconds:
+                frappe.throw(
+                    "In Time must be before Out Time."
+                )
 
         # --- Duplicate check ---
         existing = frappe.db.exists(
@@ -532,22 +594,29 @@ class AttendanceRegularization(Document):
                 diff.total_seconds() / 3600, 2
             )
 
-        # Calculate attendance status dynamically.
-        leave_status = get_leave_status(
-            self.employee, self.date
-        )
-
-        holiday_flag = is_holiday(
-            self.employee, self.date
-        )
-
-        status = determine_attendance_status(
-            working_hours,
-            leave_status,
-            holiday_flag,
-        )
+        # Use the attendance_status already set on the regularization record
+        # (calculated in before_save / validate from in_time & out_time).
+        # Fall back to dynamic calculation only if not explicitly set.
+        if self.attendance_status:
+            status = self.attendance_status
+        else:
+            leave_status = get_leave_status(self.employee, self.date)
+            holiday_flag = is_holiday(self.employee, self.date)
+            status = determine_attendance_status(
+                working_hours,
+                leave_status,
+                holiday_flag,
+            )
 
         if existing_attendance:
+            # Capture old values BEFORE updating (for activity history comment)
+            old = frappe.db.get_value(
+                "Attendance",
+                existing_attendance.name,
+                ["status", "in_time", "out_time", "working_hours"],
+                as_dict=True,
+            ) or {}
+
             # Use db_set so it works even on submitted (docstatus=1) records
             frappe.db.set_value(
                 "Attendance",
@@ -559,8 +628,48 @@ class AttendanceRegularization(Document):
                     "working_hours": working_hours,
                     "attendance_regularization": self.name,
                 },
-                update_modified=False,
+                update_modified=True,
             )
+
+            # --- Add Activity comment showing before → after ---
+            def fmt_time(val):
+                if not val:
+                    return "—"
+                if hasattr(val, "strftime"):
+                    return val.strftime("%H:%M:%S")
+                return str(val)
+
+            def fmt_status(val):
+                return val or "—"
+
+            changes = []
+            if fmt_status(old.get("status")) != fmt_status(status):
+                changes.append(
+                    f"<b>Status:</b> {fmt_status(old.get('status'))} → <b>{fmt_status(status)}</b>"
+                )
+            if fmt_time(old.get("in_time")) != fmt_time(in_time):
+                changes.append(
+                    f"<b>In Time:</b> {fmt_time(old.get('in_time'))} → <b>{fmt_time(in_time)}</b>"
+                )
+            if fmt_time(old.get("out_time")) != fmt_time(out_time):
+                changes.append(
+                    f"<b>Out Time:</b> {fmt_time(old.get('out_time'))} → <b>{fmt_time(out_time)}</b>"
+                )
+            old_wh = round(float(old.get("working_hours") or 0), 2)
+            if old_wh != working_hours:
+                changes.append(
+                    f"<b>Working Hours:</b> {old_wh} → <b>{working_hours}</b>"
+                )
+
+            if changes:
+                comment_text = (
+                    f"Updated via Attendance Regularization "
+                    f"<a href='/app/attendance-regularization/{self.name}'>{self.name}</a>:<br>"
+                    + "<br>".join(changes)
+                )
+                att_doc = frappe.get_doc("Attendance", existing_attendance.name)
+                att_doc.add_comment("Info", text=comment_text)
+
         else:
             # No attendance record for this date — create a new submitted one
             from at_biometric_integration.utils.helpers import get_employee_shift
