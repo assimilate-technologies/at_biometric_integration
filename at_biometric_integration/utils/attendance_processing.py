@@ -499,9 +499,9 @@ def update_attendance_on_checkin(doc, method=None):
 def check_min_working_hours_on_submit(doc, method=None):
     """
     before_submit hook on Attendance.
-    Only rule applied:
+    Rules:
       working_hours < 5:00:00  → status = 'Half Day'
-    All other statuses are left unchanged.
+      working_hours > 5:00:00  → status = 'Present'
     Approved Leave records are preserved as-is.
     """
     # Preserve approved leave applications
@@ -517,6 +517,8 @@ def check_min_working_hours_on_submit(doc, method=None):
 
     if work_seconds < HALF_DAY_SECONDS:
         doc.status = "Half Day"
+    else:
+        doc.status = "Present"
 
 
 def auto_submit_attendance_doc(att_doc, settings=None):
