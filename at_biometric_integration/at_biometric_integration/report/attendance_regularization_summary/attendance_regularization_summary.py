@@ -246,9 +246,6 @@ def get_report_data(filters):
                 in_datetime, out_datetime
             )
 
-            # Status is taken from Attendance only.
-            status = attendance.status if attendance else "Not Marked"
-
             leave_info = leave_map.get(key, {})
             request_info = request_map.get(key, {})
 
@@ -270,6 +267,13 @@ def get_report_data(filters):
             is_weekly_off = bool(
                 holiday_info and holiday_info.get("weekly_off")
             )
+
+            if attendance:
+                status = attendance.status
+            elif holiday_info:
+                status = "Holiday"
+            else:
+                status = "Not Marked"
 
             if (
                 is_full_leave
@@ -881,10 +885,11 @@ def status_priority(status):
     priority = {
         "Absent": 1,
         "Not Marked": 2,
-        "Half Day": 3,
-        "Present": 4,
-        "Work From Home": 5,
-        "On Leave": 6,
+        "Holiday": 3,
+        "Half Day": 4,
+        "Present": 5,
+        "Work From Home": 6,
+        "On Leave": 7,
     }
 
-    return priority.get(status, 7)
+    return priority.get(status, 8)
