@@ -42,7 +42,7 @@ frappe.query_reports["Attendance Regularization Summary"] = {
             fieldname: "status",
             label: __("Status"),
             fieldtype: "Select",
-            options: "\nPresent\nAbsent\nHalf Day\nOn Leave\nWork From Home\nNot Marked"
+            options: "\nPresent\nAbsent\nHalf Day\nOn Leave\nWork From Home\nHoliday\nNot Marked"
         },
         {
             fieldname: "missed_punch",
@@ -66,10 +66,18 @@ frappe.query_reports["Attendance Regularization Summary"] = {
         }
 
         if (column.fieldname === "status") {
-            if (data.status === "Absent") {
+            if (data.status === "Present") {
+                value = `<span style="color:#198754;font-weight:bold">${value}</span>`;
+            } else if (data.status === "Absent") {
                 value = `<span style="color:#dc3545;font-weight:bold">${value}</span>`;
-            } else if (["Half Day", "On Leave"].includes(data.status)) {
-                value = `<span style="color:#0d6efd">${value}</span>`;
+            } else if (data.status === "Half Day") {
+                value = `<span style="color:#f0ad4e;font-weight:bold">${value}</span>`;
+            } else if (data.status === "On Leave") {
+                value = `<span style="color:#dc3545;font-weight:bold">${value}</span>`;
+            } else if (data.status === "Holiday") {
+                value = `<span style="color:#0d6efd;font-weight:bold">${value}</span>`;
+            } else if (data.status === "Not Marked") {
+                value = `<span style="color:#6c757d;font-weight:bold">${value}</span>`;
             }
         }
 
