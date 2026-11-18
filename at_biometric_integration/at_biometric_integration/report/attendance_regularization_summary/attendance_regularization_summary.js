@@ -42,7 +42,7 @@ frappe.query_reports["Attendance Regularization Summary"] = {
             fieldname: "status",
             label: __("Status"),
             fieldtype: "Select",
-            options: "\nPresent\nAbsent\nHalf Day\nOn Leave\nWork From Home\nHoliday\nNot Marked"
+            options: "\nPresent\nAbsent\nHalf Day\nOn Leave\nWork From Home\nHoliday\nWeek Off\nNot Marked"
         },
         {
             fieldname: "missed_punch",
@@ -65,6 +65,10 @@ frappe.query_reports["Attendance Regularization Summary"] = {
             return value;
         }
 
+        if (column.fieldname === "employee" && data.regularization_name) {
+            value += '<span class="reg-created-row-marker" style="display:none"></span>';
+        }
+
         if (column.fieldname === "status") {
             if (data.status === "Present") {
                 value = `<span style="color:#198754;font-weight:bold">${value}</span>`;
@@ -76,8 +80,12 @@ frappe.query_reports["Attendance Regularization Summary"] = {
                 value = `<span style="color:#dc3545;font-weight:bold">${value}</span>`;
             } else if (data.status === "Holiday") {
                 value = `<span style="color:#0d6efd;font-weight:bold">${value}</span>`;
+            } else if (data.status === "Week Off") {
+                value = `<span style="color:#6f42c1;font-weight:bold">${value}</span>`;
             } else if (data.status === "Not Marked") {
                 value = `<span style="color:#6c757d;font-weight:bold">${value}</span>`;
+            }else if (data.status === "Work From Home") {
+                value = `<span style="color:#198754;font-weight:bold">${value}</span>`;
             }
         }
 
@@ -117,6 +125,17 @@ frappe.query_reports["Attendance Regularization Summary"] = {
     },
 
     onload: function (report) {
+        if (!document.getElementById("attendance-regularization-summary-style")) {
+            const style = document.createElement("style");
+            style.id = "attendance-regularization-summary-style";
+            style.innerHTML = `
+                .dt-row:has(.reg-created-row-marker) .dt-cell {
+                    background-color: #f8d7da !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
         report.page.wrapper.on(
             "click",
             ".create-regularization",
