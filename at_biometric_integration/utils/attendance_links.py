@@ -134,9 +134,14 @@ def calculate_and_set_working_hours(doc, method=None):
     """Attendance validate hook: calculate working_hours and set status per rules:
        - Approved Leave preserved
        - If in_time or out_time not present → status = 'Absent'
-       - working_hours < 5 hr               → status = 'Absent'
-       - working_hours in between 5 to 8.44 → status = 'Half Day'
-       - working_hours >= 8:45 hr           → status = 'Present'
+       - working_hours < Attendance Settings.half_day_from
+         (min_working_hour_for_half_day fallback)           → status = 'Absent'
+       - working_hours half_day_from to
+         Attendance Settings.half_day_to
+         (min_working_hours fallback)                       → status = 'Absent-Half Day'
+         (grace window → 'Present', max 3 per employee per month)
+       - working_hours >= Attendance
+         Settings.half_day_to                               → status = 'Present'
     """
     if doc.get("status") == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")):
         return
@@ -156,4 +161,7 @@ def calculate_and_set_working_hours(doc, method=None):
         doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
 
     work_seconds = get_working_hours_seconds(doc.working_hours)
-    doc.status = get_status_by_working_hours(work_seconds, doc.in_time, doc.out_time)
+    doc.status = get_status_by_working_hours(
+        work_seconds, doc.in_time, doc.out_time,
+        employee=doc.get("employee"), attendance_date=doc.get("attendance_date"),
+    )

@@ -511,7 +511,11 @@ def update_attendance_on_checkin(doc, method=None):
             else:
                 status = "Absent"
         else:
-            status = determine_attendance_status(hours, leave_status, holiday_flag, in_time=first_time, out_time=last_time)
+            status = determine_attendance_status(
+                hours, leave_status, holiday_flag,
+                in_time=first_time, out_time=last_time,
+                employee=employee, attendance_date=checkin_date,
+            )
 
         existing_draft = frappe.db.get_value(
             "Attendance",
@@ -591,27 +595,107 @@ def update_attendance_on_checkin(doc, method=None):
         frappe.log_error(title=f"Live Attendance Update Error: {doc.get('employee')}", message=frappe.get_traceback())
 
 
-def get_status_by_working_hours(work_seconds, in_time=None, out_time=None):
+def get_status_by_working_hours(work_seconds, in_time=None, out_time=None, employee=None, attendance_date=None):
     """
     Status rules based on in_time, out_time, and working_hours:
-      If in_time or out_time not present   → 'Absent'
-      working_hours < 5 hr                 ( < 18,000 sec)  → 'Absent'
-      working_hours in between 5 to 8.44 hr (18,000 to 31,499) → 'Half Day'
-      working_hours >= 8:45 hr             (>= 31,500 sec)  → 'Present'
+      If in_time or out_time not present                   → 'Absent'
+      working_hours < Attendance Settings.half_day_from
+        (min_working_hour_for_half_day fallback)           → 'Absent'
+      working_hours between half_day_from and
+        Attendance Settings.half_day_to
+        (min_working_hours fallback)                       → 'Absent-Half Day'
+        (grace window before the threshold counts as 'Present',
+         max 3 grace days per employee per month)
+      working_hours >= Attendance
+        Settings.half_day_to                               → 'Present'
     """
+    from .helpers import get_status_from_work_seconds
+
     if in_time is not None or out_time is not None:
         if not in_time or not out_time:
             return "Absent"
 
-    FIVE_HOURS = 5 * 3600                     # 18,000 seconds (5:00:00)
-    EIGHT_FORTY_FIVE = 8 * 3600 + 45 * 60     # 31,500 seconds (8:45:00)
+    return get_status_from_work_seconds(
+        work_seconds, employee=employee, attendance_date=attendance_date
+    )
 
-    if work_seconds < FIVE_HOURS:
-        return "Absent"
-    elif work_seconds < EIGHT_FORTY_FIVE:
-        return "Half Day"
-    else:
-        return "Present"
+
+@frappe.whitelist()
+def get_status_for_grace_check(employee, attendance_date, work_seconds):
+    """Used by the Attendance form to resolve status inside the grace
+    window below Attendance Settings.min_working_hours (default 8:40-9:00;
+    monthly quota of 3 applies)."""
+    from .helpers import get_status_from_work_seconds
+    return get_status_from_work_seconds(
+        int(work_seconds or 0), employee=employee, attendance_date=attendance_date
+    )
+
+
+@frappe.whitelist()
+def update_existing_attendance_status(from_date=None, to_date=None, employee=None):
+    """Recompute status on existing Attendance records using the current rules
+       (range from Attendance Settings.half_day_from / half_day_to,
+       falling back to min_working_hour_for_half_day / min_working_hours):
+         < half_day_from (floor)            → 'Absent'
+         floor .. half_day_to (threshold)   → 'Absent-Half Day'
+           (grace window → 'Present', max 3 per employee per month)
+         >= half_day_to                     → 'Present'
+       On Leave / Holiday / Work From Home records are left untouched.
+
+    Args:
+        from_date, to_date (str, optional): date range. Defaults to all records.
+        employee (str, optional): single employee.
+
+    Returns:
+        dict: {"updated": n, "total": m}
+    """
+    filters = {"status": ["not in", ["On Leave", "Holiday", "Work From Home"]]}
+    if from_date or to_date:
+        if from_date:
+            filters["attendance_date"] = [">=", getdate(from_date)]
+        if to_date:
+            if "attendance_date" in filters:
+                filters["attendance_date"] = ["between", [getdate(from_date), getdate(to_date)]]
+            else:
+                filters["attendance_date"] = ["<=", getdate(to_date)]
+    if employee:
+        filters["employee"] = employee
+
+    records = frappe.get_all(
+        "Attendance",
+        filters=filters,
+        fields=["name", "employee", "attendance_date", "in_time", "out_time",
+                "working_hours", "status", "leave_application", "leave_type"],
+        order_by="employee asc, attendance_date asc",
+        limit_page_length=0,
+    )
+
+    updated = 0
+    for r in records:
+        # Preserve leave-backed records (half-day leave also has status 'Half Day')
+        if r.leave_application or r.leave_type:
+            continue
+
+        if not r.in_time or not r.out_time:
+            work_hrs = "00:00:00"
+            new_status = "Absent"
+        else:
+            work_hrs = calculate_working_hours(r.in_time, r.out_time)
+            work_seconds = get_working_hours_seconds(work_hrs)
+            new_status = get_status_by_working_hours(
+                work_seconds, r.in_time, r.out_time,
+                employee=r.employee, attendance_date=r.attendance_date,
+            )
+
+        if r.status != new_status or r.working_hours != work_hrs:
+            frappe.db.set_value("Attendance", r.name, {
+                "working_hours": work_hrs or "00:00:00",
+                "status": new_status,
+            }, update_modified=False)
+            updated += 1
+
+    frappe.db.commit()
+    return {"updated": updated, "total": len(records)}
 
 
 def check_min_working_hours_on_submit(doc, method=None):
@@ -619,9 +703,14 @@ def check_min_working_hours_on_submit(doc, method=None):
     before_submit hook on Attendance.
     Rules:
       If in_time and out_time not present → status = 'Absent'
-      working_hours < 5 hr               → status = 'Absent'
-      working_hours in between 5 to 8.44 → status = 'Half Day'
-      working_hours >= 8:45 hr           → status = 'Present'
+      working_hours < Attendance Settings.half_day_from
+        (min_working_hour_for_half_day fallback)           → status = 'Absent'
+      working_hours between half_day_from and
+        Attendance Settings.half_day_to
+        (min_working_hours fallback)                       → status = 'Absent-Half Day'
+        (grace window → 'Present', max 3 per employee per month)
+      working_hours >= Attendance
+        Settings.half_day_to                               → status = 'Present'
     Approved Leave records are preserved as-is.
     """
     # Preserve approved leave applications
@@ -640,7 +729,10 @@ def check_min_working_hours_on_submit(doc, method=None):
         doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
 
     work_seconds = get_working_hours_seconds(doc.get("working_hours"))
-    doc.status = get_status_by_working_hours(work_seconds, doc.get("in_time"), doc.get("out_time"))
+    doc.status = get_status_by_working_hours(
+        work_seconds, doc.get("in_time"), doc.get("out_time"),
+        employee=doc.get("employee"), attendance_date=doc.get("attendance_date"),
+    )
 
 
 def auto_submit_attendance_doc(att_doc, settings=None):
@@ -695,10 +787,14 @@ def auto_submit_attendance_doc(att_doc, settings=None):
 
         # 4. Status rule:
         #    If On Leave: preserved
-        #    If in_time or out_time not present   → 'Absent'
-        #    working_hours < 5 hr                 → 'Absent'
-        #    working_hours in between 5 to 8.44 hr → 'Half Day'
-        #    working_hours >= 8:45 hr             → 'Present'
+        #    If in_time or out_time not present       → 'Absent'
+        #    working_hours < Attendance Settings.
+        #      min_working_hour_for_half_day          → 'Absent'
+        #    working_hours between the floor and
+        #      Attendance Settings.min_working_hours → 'Absent-Half Day'
+        #      (grace window → 'Present', max 3 per employee per month)
+        #    working_hours >= Attendance
+        #      Settings.min_working_hours            → 'Present'
         is_on_leave = (doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")))
 
         if is_on_leave:
@@ -707,10 +803,13 @@ def auto_submit_attendance_doc(att_doc, settings=None):
             doc.status = "Absent"
         else:
             work_seconds = get_working_hours_seconds(doc.working_hours)
-            doc.status = get_status_by_working_hours(work_seconds, doc.in_time, doc.out_time)
+            doc.status = get_status_by_working_hours(
+                work_seconds, doc.in_time, doc.out_time,
+                employee=doc.employee, attendance_date=doc.attendance_date,
+            )
 
         # 5. Final safety check — Frappe HRMS valid statuses
-        valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
+        valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Absent-Half Day", "Work From Home"]
         if doc.status not in valid_statuses:
             doc.status = "Absent"
 
@@ -735,11 +834,14 @@ def auto_submit_attendance_doc(att_doc, settings=None):
 def update_attendance_statuses_backend(date=None):
     """
     Direct Backend Execution Command:
-    Updates attendance records to match the rules:
-      If in_time or out_time not present   → status = 'Absent', working_hours = '00:00:00'
-      working_hours < 5 hr                 → status = 'Absent'
-      working_hours in between 5 to 8.44 hr → status = 'Half Day'
-      working_hours >= 8:45 hr             → status = 'Present'
+    Updates attendance records to match the rules (range from
+    Attendance Settings.half_day_from / half_day_to):
+      If in_time or out_time not present      → status = 'Absent', working_hours = '00:00:00'
+      working_hours < half_day_from (5 hr default)        → status = 'Absent'
+      working_hours half_day_from to
+        half_day_to (9 hr default)                        → status = 'Absent-Half Day'
+        (grace window → 'Present', max 3 per employee per month)
+      working_hours >= half_day_to                        → status = 'Present'
     """
     filters = {"status": ["!=", "Holiday"]}
     if date:
@@ -764,7 +866,10 @@ def update_attendance_statuses_backend(date=None):
         else:
             work_hrs = calculate_working_hours(r.in_time, r.out_time)
             work_seconds = get_working_hours_seconds(work_hrs)
-            new_status = get_status_by_working_hours(work_seconds, r.in_time, r.out_time)
+            new_status = get_status_by_working_hours(
+                work_seconds, r.in_time, r.out_time,
+                employee=r.employee, attendance_date=r.attendance_date,
+            )
 
         if r.status != new_status or r.working_hours != work_hrs:
             frappe.db.set_value("Attendance", r.name, {
@@ -983,7 +1088,11 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             else:
                 status = "Absent"
         else:
-            status = determine_attendance_status(hours, leave_status, holiday_flag, in_time=first_time, out_time=last_time)
+            status = determine_attendance_status(
+                hours, leave_status, holiday_flag,
+                in_time=first_time, out_time=last_time,
+                employee=employee, attendance_date=curr_date,
+            )
 
         # Check for existing attendance (both draft and submitted)
         existing_draft = frappe.db.exists("Attendance", {
@@ -1349,7 +1458,7 @@ def sync_all_attendance_checkin_times(date=None):
       - working_hours = calculate_working_hours(in_time, out_time)
       - Work From Home employees with check-ins -> 'Work From Home'
       - Work From Home employees with NO check-ins -> 'Absent'
-      - Office employees -> 'Absent' / 'Half Day' / 'Present' per working_hours rules
+      - Office employees -> 'Absent' / 'Absent-Half Day' / 'Present' per working_hours rules
       - On Leave preserved
     """
     filters = {}
@@ -1408,7 +1517,10 @@ def sync_all_attendance_checkin_times(date=None):
             new_status = "Absent"
         else:
             work_seconds = get_working_hours_seconds(hrs)
-            new_status = get_status_by_working_hours(work_seconds, in_t, out_t)
+            new_status = get_status_by_working_hours(
+                work_seconds, in_t, out_t,
+                employee=att.employee, attendance_date=att.attendance_date,
+            )
 
         update_dict = {
             "in_time": in_t,

@@ -331,6 +331,25 @@ def log_error(msg, title="Biometric Integration Error"):
         frappe.logger().error(f"{title}: {msg}")
 
 
+def _time_to_seconds(val):
+    """Convert a Time value (datetime.time or 'HH:MM:SS' string) to
+    seconds since midnight. Returns 0 for empty/invalid values."""
+    if not val:
+        return 0
+    try:
+        if hasattr(val, "hour"):  # datetime.time
+            return int(val.hour) * 3600 + int(val.minute) * 60 + int(val.second or 0)
+        parts = str(val).strip().split(":")
+        if len(parts) >= 2:
+            hours = int(float(parts[0]))
+            minutes = int(float(parts[1]))
+            seconds = int(float(parts[2])) if len(parts) > 2 else 0
+            return hours * 3600 + minutes * 60 + seconds
+    except (ValueError, TypeError, AttributeError):
+        return 0
+    return 0
+
+
 def time_to_hours(val):
     """Convert time (str 'HH:MM:SS', timedelta, int, or float) to decimal hours."""
     if not val:
@@ -383,6 +402,14 @@ def get_attendance_settings():
             "min_working_hour_for_half_day": time_to_hours(
                 getattr(s, "min_working_hour_for_half_day", 0)
             ),
+            # Half Day window as Time fields (seconds), preferred over the
+            # Float fields above when set — see get_status_from_work_seconds
+            "half_day_from_seconds": _time_to_seconds(
+                getattr(s, "half_day_from", None)
+            ),
+            "half_day_to_seconds": _time_to_seconds(
+                getattr(s, "half_day_to", None)
+            ),
             # Both keys point to the same field — no hardcoded default
             "auto_submit_after_shift_hours": auto_hours,
             "auto_submit_hours_after_shift": auto_hours,
@@ -399,6 +426,8 @@ def get_attendance_settings():
             "regularization_to_hours": 0,
             "min_working_hours": 0,
             "min_working_hour_for_half_day": 0,
+            "half_day_from_seconds": 0,
+            "half_day_to_seconds": 0,
             "auto_submit_after_shift_hours": 0,
             "auto_submit_hours_after_shift": 0,
             "max_regularization_days": 0,
@@ -818,6 +847,165 @@ def calculate_working_hours(first_checkin, last_checkin):
 
 
 # ------------------------------------------------
+# Status rules (all thresholds read from Attendance Settings):
+#   < half_day_from (min_working_hour_for_half_day) = Absent
+#   half_day_from
+#     .. half_day_to (min_working_hours)            = Absent-Half Day
+#   >= half_day_to                                  = Present
+# with a 20-minute grace window before the upper
+# threshold that is honoured at most 3 times per
+# employee per month.
+#
+# The Absent-Half Day range comes from the Time fields
+#   Attendance Settings.half_day_from / half_day_to.
+# When those are empty the Float fields (hours) are used,
+# and the constants below are only the final fallbacks
+# when everything is unset.
+# ------------------------------------------------
+MIN_HOURS_SECONDS = 5 * 3600            # fallback 5:00:00 when the floor is unset
+FULL_HOURS_SECONDS = 9 * 3600           # fallback 9:00:00 when the threshold is unset
+GRACE_MINUTES = 20
+GRACE_LIMIT_PER_MONTH = 3
+
+
+def get_min_working_hours_seconds():
+    """Present threshold in seconds. Prefers Attendance Settings.half_day_to
+    (Time field) when set; otherwise reads min_working_hours (Float, hours).
+
+    Falls back to 9 hours (FULL_HOURS_SECONDS) when both are empty/0 so
+    existing behaviour is preserved until HR sets them.
+    """
+    settings = get_attendance_settings()
+
+    half_day_to = int(settings.get("half_day_to_seconds") or 0)
+    if half_day_to > 0:
+        return half_day_to
+
+    try:
+        hours = float(settings.get("min_working_hours") or 0)
+    except Exception:
+        hours = 0.0
+
+    if hours <= 0:
+        return FULL_HOURS_SECONDS
+
+    return int(round(hours * 3600))
+
+
+def get_min_working_hour_for_half_day_seconds():
+    """Half Day floor in seconds. Prefers Attendance Settings.half_day_from
+    (Time field) when set; otherwise reads
+    min_working_hour_for_half_day (Float, hours).
+
+    Below this many working hours the status is 'Absent' instead of
+    'Absent-Half Day'. Falls back to 5 hours (MIN_HOURS_SECONDS) when
+    both are empty/0 so existing behaviour is preserved.
+    """
+    settings = get_attendance_settings()
+
+    half_day_from = int(settings.get("half_day_from_seconds") or 0)
+    if half_day_from > 0:
+        return half_day_from
+
+    try:
+        hours = float(settings.get("min_working_hour_for_half_day") or 0)
+    except Exception:
+        hours = 0.0
+
+    if hours <= 0:
+        return MIN_HOURS_SECONDS
+
+    return int(round(hours * 3600))
+
+
+def get_grace_start_seconds():
+    """Start (in seconds) of the 20-minute grace window below the
+    Present threshold: min_working_hours - GRACE_MINUTES."""
+    return get_min_working_hours_seconds() - (GRACE_MINUTES * 60)
+
+
+def get_grace_position(employee, attendance_date):
+    """1-based position of this date among the employee's grace-window days
+    (working_hours between the grace start and min_working_hours — default
+    8:40 and 9:00) in the calendar month, counting only
+    days BEFORE this date. Returns 1 for the first grace day of the month."""
+    if not employee or not attendance_date:
+        return GRACE_LIMIT_PER_MONTH + 1
+
+    date = getdate(attendance_date)
+    month_start = date.replace(day=1)
+
+    # Grace window is relative to the configured Present threshold
+    full_seconds = get_min_working_hours_seconds()
+    grace_start_seconds = get_grace_start_seconds()
+
+    rows = frappe.get_all(
+        "Attendance",
+        filters={
+            "employee": employee,
+            "attendance_date": ["between", [month_start, date]],
+            "docstatus": ["!=", 2],
+        },
+        fields=["attendance_date", "working_hours", "in_time", "out_time"],
+        order_by="attendance_date asc",
+        limit_page_length=0,
+    )
+
+    used = 0
+    for r in rows:
+        if getdate(r.attendance_date) >= date:
+            continue
+        if r.get("in_time") and r.get("out_time"):
+            secs = int(round(time_to_hours(
+                calculate_working_hours_from_times(r.in_time, r.out_time)
+            ) * 3600))
+        else:
+            secs = int(round(time_to_hours(r.working_hours) * 3600))
+        if grace_start_seconds <= secs < full_seconds:
+            used += 1
+            if used >= GRACE_LIMIT_PER_MONTH:
+                return used + 1
+    return used + 1
+
+
+def get_status_from_work_seconds(work_seconds, employee=None, attendance_date=None):
+    """Core status rule (thresholds from Attendance Settings
+    half_day_from / half_day_to Time fields, falling back to the Float
+    hour fields, then 5 hr / 9 hr defaults):
+        < half_day_from                 -> 'Absent'
+        half_day_from
+          .. half_day_to                -> 'Absent-Half Day'
+        grace window below
+        half_day_to                     -> 'Present' (max 3 per employee per month)
+        >= half_day_to                  -> 'Present'
+    """
+    work_seconds = int(work_seconds or 0)
+    full_seconds = get_min_working_hours_seconds()
+    half_day_floor_seconds = get_min_working_hour_for_half_day_seconds()
+    grace_start_seconds = full_seconds - (GRACE_MINUTES * 60)
+
+    # Present threshold is checked first so it always wins, even if the
+    # half-day floor was configured higher than the Present threshold.
+    if work_seconds >= full_seconds:
+        return "Present"
+    if work_seconds < half_day_floor_seconds:
+        return "Absent"
+
+    # Between the configured floor and the configured threshold:
+    # Absent-Half Day, unless inside the 20-minute grace window and the
+    # monthly grace quota is not exhausted.
+    if (
+        work_seconds >= grace_start_seconds
+        and employee
+        and attendance_date
+        and get_grace_position(employee, attendance_date) <= GRACE_LIMIT_PER_MONTH
+    ):
+        return "Present"
+
+    return "Absent-Half Day"
+
+
+# ------------------------------------------------
 # Status determination (Option B)
 # ------------------------------------------------
 def determine_attendance_status(
@@ -827,6 +1015,8 @@ def determine_attendance_status(
     min_hours=None,
     in_time=None,
     out_time=None,
+    employee=None,
+    attendance_date=None,
 ):
     # Priority 1: Holiday
     if is_holiday_flag:
@@ -841,20 +1031,16 @@ def determine_attendance_status(
         if not in_time or not out_time:
             return "Absent"
 
-    # Priority 4: Working hours rules:
-    #   < 5 hr         → 'Absent'
-    #   5 to 8.44 hr   → 'Half Day'
-    #   >= 8:45 hr     → 'Present'
-    work_h = time_to_hours(working_hours)
-    FIVE_HOURS = 5.0
-    EIGHT_FORTY_FIVE = 8.75  # 8 hours 45 mins
-
-    if work_h < FIVE_HOURS:
-        return "Absent"
-    elif work_h < EIGHT_FORTY_FIVE:
-        return "Half Day"
-    else:
-        return "Present"
+    # Priority 4: Working hours rules (see get_status_from_work_seconds):
+    #   < half_day_from                  → 'Absent'
+    #   half_day_from .. half_day_to     → 'Absent-Half Day'
+    #     (grace window → 'Present', 3x/month)
+    #   >= half_day_to                   → 'Present'
+    #   (Attendance Settings Time fields, Float fields as fallback)
+    work_seconds = int(round(time_to_hours(working_hours) * 3600))
+    return get_status_from_work_seconds(
+        work_seconds, employee=employee, attendance_date=attendance_date
+    )
 
 
 # ------------------------------------------------

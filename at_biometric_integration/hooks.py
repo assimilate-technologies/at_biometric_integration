@@ -334,6 +334,8 @@ after_migrate = ["at_biometric_integration.patches.workflow_state_action.execute
                  "at_biometric_integration.patches.create_biometric_roles_and_permissions.execute",
                  "at_biometric_integration.patches.add_half_day_applicable_field_on_attendance_setting.execute",
                  "at_biometric_integration.patches.add_field_on_employee_work_type.execute",
-                 "at_biometric_integration.patches.add_employee_checkin_link.execute"
+                 "at_biometric_integration.patches.add_employee_checkin_link.execute",
+                 "at_biometric_integration.patches.update_attendance_status_rules.execute",
+                 "at_biometric_integration.patches.add_fields_on_attendancesettings.execute"
                 ]
 

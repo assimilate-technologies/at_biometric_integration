@@ -172,7 +172,10 @@ def backfill_employee_checkins():
                 new_status = "Absent"
             else:
                 work_seconds = get_working_hours_seconds(hrs)
-                new_status = get_status_by_working_hours(work_seconds, in_t, out_t)
+                new_status = get_status_by_working_hours(
+                    work_seconds, in_t, out_t,
+                    employee=att.employee, attendance_date=att.attendance_date,
+                )
 
             update_data = {
                 "in_time": in_t,
