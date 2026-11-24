@@ -10,8 +10,7 @@
       "fieldname": "month",
       "label": "Month",
       "fieldtype": "Select",
-      "options": "\nJanuary\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember",
-      "reqd": 1
+      "options": "\nJanuary\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember"
     },
     {
       "fieldname": "year",
