@@ -327,13 +327,15 @@ fixtures = [
     {
         "doctype": "Workflow",
         "filters": [["workflow_name", "=", "Attendance Regularization Approval"]]
+    },
+    {
+        "doctype": "Property Setter",
+        "filters": [
+            ["doc_type", "=", "Attendance"],
+            ["field_name", "=", "status"],
+            ["property", "=", "options"]
+        ]
     }
-    # ,
-    # { 
-    #  "doctype": "Workspace",
-    #  "filters": [["name", "=", "Biometric Workspace"]]
-    # }
-    
 ]
 after_migrate = ["at_biometric_integration.patches.workflow_state_action.execute",
                  "at_biometric_integration.patches.create_biometric_roles_and_permissions.execute",
@@ -343,6 +345,7 @@ after_migrate = ["at_biometric_integration.patches.workflow_state_action.execute
                  "at_biometric_integration.patches.update_attendance_status_rules.execute",
                  "at_biometric_integration.patches.add_fields_on_attendancesettings.execute",
                  "at_biometric_integration.patches.add_from_date_on_attendance_regularization.execute",
-                 "at_biometric_integration.patches.sync_existing_wfh_and_half_day_attendance.execute"
+                 "at_biometric_integration.patches.sync_existing_wfh_and_half_day_attendance.execute",
+                 "at_biometric_integration.patches.add_absent_half_day_status_option.execute"
                 ]
 
