@@ -55,9 +55,18 @@ def set_employee_checkin_link(doc, method=None):
     with ALL Employee Checkin records for this employee + date.
     Take the first record time as in_time and the last record time as out_time.
     When only one record, in_time and out_time show the same.
+    Skips WFH attendance — no in/out times or checkin links needed.
     """
     if not doc.get("employee") or not doc.get("attendance_date"):
         return
+
+    # WFH attendance: skip entirely — no checkins, no in/out times
+    if doc.get("status") == "Work From Home":
+        return
+    if doc.get("attendance_regularization"):
+        from at_biometric_integration.utils.helpers import is_wfh_regularization
+        if is_wfh_regularization(doc.get("name")):
+            return
 
     from at_biometric_integration.utils.helpers import calculate_working_hours
 
@@ -99,16 +108,45 @@ def get_regularization_for_attendance(employee, attendance_date):
     """Submitted Attendance Regularization of that employee on the date.
 
     Prefers an approved one, otherwise the latest submitted.
+    Also looks for WFH regularizations where from_date <= attendance_date <= date.
     """
     if not employee or not attendance_date:
         return None
 
+    attendance_date = getdate(attendance_date)
+
+    # First: exact date match (regular + single-day WFH)
     regularizations = frappe.get_all(
         "Attendance Regularization",
-        filters={"employee": employee, "date": getdate(attendance_date), "docstatus": 1},
+        filters={"employee": employee, "date": attendance_date, "docstatus": 1},
         fields=["name", "workflow_state"],
         order_by="creation desc",
     )
+
+    # Second: WFH date-range match (from_date <= attendance_date <= date)
+    # Only check if from_date field exists (added via patch)
+    try:
+        wfh_regs = frappe.get_all(
+            "Attendance Regularization",
+            filters={
+                "employee": employee,
+                "is_work_from_home": 1,
+                "from_date": ["<=", attendance_date],
+                "date": [">=", attendance_date],
+                "docstatus": 1,
+            },
+            fields=["name", "workflow_state"],
+            order_by="creation desc",
+        )
+        # Merge, dedup by name
+        seen = {r["name"] for r in regularizations}
+        for r in wfh_regs:
+            if r["name"] not in seen:
+                regularizations.append(r)
+                seen.add(r["name"])
+    except Exception:
+        pass  # from_date field may not exist on older installs
+
     if not regularizations:
         return None
 
@@ -132,6 +170,7 @@ def set_attendance_regularization_link(doc, method=None):
 
 def calculate_and_set_working_hours(doc, method=None):
     """Attendance validate hook: calculate working_hours and set status per rules:
+       - WFH Regularization: status preserved as 'Work From Home', skip working_hours rules
        - Approved Leave preserved
        - If in_time or out_time not present → status = 'Absent'
        - working_hours < Attendance Settings.half_day_from
@@ -143,10 +182,31 @@ def calculate_and_set_working_hours(doc, method=None):
        - working_hours >= Attendance
          Settings.half_day_to                               → status = 'Present'
     """
+    from at_biometric_integration.utils.helpers import calculate_working_hours, is_wfh_regularization
+
+    # WFH Regularization: preserve 'Work From Home' status, skip working_hours rules
+    if is_wfh_regularization(doc.get("name")):
+        doc.status = "Work From Home"
+        return
+
+    # Also check if attendance_regularization is linked and is_work_from_home is set
+    if doc.get("attendance_regularization"):
+        try:
+            if frappe.db.get_value("Attendance Regularization", doc.attendance_regularization, "is_work_from_home"):
+                doc.status = "Work From Home"
+                return
+        except Exception:
+            pass
+
+    # Half-day leave: preserve 'Half Day' status, skip working_hours rules
+    from at_biometric_integration.utils.helpers import is_half_day_leave
+    if is_half_day_leave(doc.get("employee"), doc.get("attendance_date"), doc.get("leave_application")):
+        doc.status = "Half Day"
+        return
+
     if doc.get("status") == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")):
         return
 
-    from at_biometric_integration.utils.helpers import calculate_working_hours
     from at_biometric_integration.utils.attendance_processing import get_working_hours_seconds, get_status_by_working_hours
 
     if not doc.get("in_time") or not doc.get("out_time"):

@@ -180,7 +180,12 @@ doc_events = {
         "after_insert": [
             "at_biometric_integration.utils.attendance_processing.create_attendance_for_new_employee",
         ],
-    }
+    },
+    "Leave Application": {
+        "on_cancel": [
+            "at_biometric_integration.utils.leave_application_hooks.unlink_attendance_on_leave_cancel",
+        ],
+    },
 }
 
 # Scheduled Tasks
@@ -224,8 +229,8 @@ override_doctype_dashboards = {
 }
 
 # exempt linked doctypes from being automatically cancelled
-#
-# auto_cancel_exempted_doctypes = ["Auto Repeat"]
+# Attendance records should NOT be auto-cancelled when a Leave Application is cancelled
+auto_cancel_exempted_doctypes = ["Attendance"]
 
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
@@ -336,6 +341,8 @@ after_migrate = ["at_biometric_integration.patches.workflow_state_action.execute
                  "at_biometric_integration.patches.add_field_on_employee_work_type.execute",
                  "at_biometric_integration.patches.add_employee_checkin_link.execute",
                  "at_biometric_integration.patches.update_attendance_status_rules.execute",
-                 "at_biometric_integration.patches.add_fields_on_attendancesettings.execute"
+                 "at_biometric_integration.patches.add_fields_on_attendancesettings.execute",
+                 "at_biometric_integration.patches.add_from_date_on_attendance_regularization.execute",
+                 "at_biometric_integration.patches.sync_existing_wfh_and_half_day_attendance.execute"
                 ]
 

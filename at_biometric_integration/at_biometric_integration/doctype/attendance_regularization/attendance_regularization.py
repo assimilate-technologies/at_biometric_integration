@@ -206,12 +206,25 @@
 from frappe.model.document import Document
 import frappe
 from datetime import datetime, time, timedelta
+from frappe.utils import getdate, add_days, now_datetime, get_datetime
 
 from at_biometric_integration.utils.helpers import (
     get_leave_status,
     is_holiday,
     determine_attendance_status,
 )
+
+
+def to_hours(val):
+    """Convert working_hours (timedelta, float, str, or None) to float hours."""
+    if not val:
+        return 0.0
+    if hasattr(val, "total_seconds"):  # datetime.timedelta
+        return round(val.total_seconds() / 3600, 2)
+    try:
+        return round(float(val), 2)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class AttendanceRegularization(Document):
@@ -281,8 +294,18 @@ class AttendanceRegularization(Document):
         4. The regularization is being created within the allowed time window
            (regularization_from_hours after shift start  →
             regularization_to_hours after shift end) defined in Attendance Settings.
+        5. For Work From Home with date range, from_date is required and must be <= date.
         """
         self.calculate_and_set_attendance_status()
+
+        if not self.from_date:
+            frappe.throw(
+                frappe._("From Date is mandatory.")
+            )
+        if getdate(self.from_date) > getdate(self.date):
+            frappe.throw(
+                frappe._("From Date cannot be after Date.")
+            )
 
         if not self.is_work_from_home:
             if not self.in_time or not self.out_time:
@@ -373,7 +396,12 @@ class AttendanceRegularization(Document):
           - Window opens : shift_start  + regularization_from_hours
           - Window closes: shift_end    + regularization_to_hours
         If enable_regularization is False in Settings, skip this check.
+        Also skip this check for Work From Home regularizations (is_work_from_home checked).
         """
+        # Skip window validation for Work From Home employees
+        if self.is_work_from_home:
+            return
+
         from at_biometric_integration.utils.helpers import (
             get_attendance_settings,
             get_employee_shift,
@@ -434,6 +462,10 @@ class AttendanceRegularization(Document):
         """
         Process Attendance Regularization when approved by HR.
         Creates or updates Employee Checkin and Attendance.
+        
+        If is_work_from_home is checked and from_date is set, creates/updates
+        attendance records for the entire date range (from_date to date) with
+        status 'Work From Home'.
         """
 
         employee_details = frappe.get_value(
@@ -493,6 +525,27 @@ class AttendanceRegularization(Document):
                     "Invalid time format for in_time or out_time."
                 )
 
+        # Handle Work From Home (single date or date range)
+        if self.is_work_from_home:
+            from frappe.utils import getdate, add_days
+            # If from_date is set, process date range; otherwise single date
+            start_date = getdate(self.from_date) if self.from_date else getdate(self.date)
+            end_date = getdate(self.date)
+
+            curr_date = start_date
+            while curr_date <= end_date:
+                # Create/update attendance record for each date with Work From Home status
+                self._create_or_update_wfh_attendance(employee_details, curr_date)
+                curr_date = add_days(curr_date, 1)
+
+            # Backfill attendance_regularization link on ALL attendance records
+            # in the date range (catches any that already existed and weren't processed above)
+            self._link_all_attendance_in_range(start_date, end_date)
+
+            # For WFH, we don't create check-ins (no in_time/out_time needed)
+            return
+
+        # Regular (non-WFH) processing for single date
         in_time_dt = None
         out_time_dt = None
 
@@ -528,6 +581,145 @@ class AttendanceRegularization(Document):
             in_time_dt,
             out_time_dt,
         )
+
+    def _create_or_update_wfh_attendance(self, employee_details, attendance_date):
+        """
+        Create or update Attendance record for Work From Home on a specific date.
+        """
+        existing_attendance = frappe.db.get_value(
+            "Attendance",
+            {
+                "employee": self.employee,
+                "attendance_date": attendance_date,
+            },
+            ["name", "docstatus"],
+            as_dict=True,
+        )
+
+        status = "Work From Home"
+        working_hours = 0.0
+
+        if existing_attendance:
+            # Capture old values BEFORE updating (for activity history comment)
+            old = frappe.db.get_value(
+                "Attendance",
+                existing_attendance.name,
+                ["status", "in_time", "out_time", "working_hours"],
+                as_dict=True,
+            ) or {}
+
+            # Use db_set so it works even on submitted (docstatus=1) records
+            frappe.db.set_value(
+                "Attendance",
+                existing_attendance.name,
+                {
+                    "status": status,
+                    "in_time": None,
+                    "out_time": None,
+                    "working_hours": working_hours,
+                    "attendance_regularization": self.name,
+                },
+                update_modified=True,
+            )
+
+            # --- Add Activity comment showing before → after ---
+            def fmt_time(val):
+                if not val:
+                    return "—"
+                if hasattr(val, "strftime"):
+                    return val.strftime("%H:%M:%S")
+                return str(val)
+
+            def fmt_status(val):
+                return val or "—"
+
+            changes = []
+            if fmt_status(old.get("status")) != fmt_status(status):
+                changes.append(
+                    f"<b>Status:</b> {fmt_status(old.get('status'))} → <b>{fmt_status(status)}</b>"
+                )
+            if fmt_time(old.get("in_time")) != fmt_time(None):
+                changes.append(
+                    f"<b>In Time:</b> {fmt_time(old.get('in_time'))} → <b>—</b>"
+                )
+            if fmt_time(old.get("out_time")) != fmt_time(None):
+                changes.append(
+                    f"<b>Out Time:</b> {fmt_time(old.get('out_time'))} → <b>—</b>"
+                )
+
+            old_wh = to_hours(old.get("working_hours"))
+            if old_wh != working_hours:
+                changes.append(
+                    f"<b>Working Hours:</b> {old_wh} → <b>{working_hours}</b>"
+                )
+
+            if changes:
+                comment_text = (
+                    f"Updated via Attendance Regularization (Work From Home) "
+                    f"<a href='/app/attendance-regularization/{self.name}'>{self.name}</a>:<br>"
+                    + "<br>".join(changes)
+                )
+                att_doc = frappe.get_doc("Attendance", existing_attendance.name)
+                att_doc.add_comment("Info", text=comment_text)
+
+        else:
+            # No attendance record for this date — create a new submitted one
+            from at_biometric_integration.utils.helpers import get_employee_shift
+            shift_doc = get_employee_shift(self.employee, attendance_date)
+            shift_name = shift_doc.name if shift_doc else employee_details.default_shift
+
+            att = frappe.get_doc({
+                "doctype": "Attendance",
+                "employee": self.employee,
+                "employee_name": self.employee_name,
+                "attendance_date": attendance_date,
+                "status": status,
+                "company": employee_details.company,
+                "shift": shift_name,
+                "in_time": None,
+                "out_time": None,
+                "working_hours": working_hours,
+                "attendance_regularization": self.name,
+            })
+            att.flags.ignore_permissions = True
+            att.insert()
+            att.submit()
+
+    def _link_all_attendance_in_range(self, start_date, end_date):
+        """
+        Backfill attendance_regularization link on ALL Attendance records for this
+        employee between start_date and end_date (inclusive).
+        Also sets status = 'Work From Home' on any that don't have it yet.
+        Works on both draft (docstatus=0) and submitted (docstatus=1) records.
+        """
+        from frappe.utils import getdate
+        attendance_records = frappe.get_all(
+            "Attendance",
+            filters={
+                "employee": self.employee,
+                "attendance_date": ["between", [getdate(start_date), getdate(end_date)]],
+            },
+            fields=["name", "docstatus", "attendance_regularization", "status"],
+        )
+
+        for att in attendance_records:
+            update_fields = {}
+
+            # Link this regularization if not already linked
+            if att.attendance_regularization != self.name:
+                update_fields["attendance_regularization"] = self.name
+
+            # Update status to Work From Home if not already
+            if att.status != "Work From Home":
+                update_fields["status"] = "Work From Home"
+
+            if update_fields:
+                frappe.db.set_value(
+                    "Attendance",
+                    att.name,
+                    update_fields,
+                    update_modified=True,
+                )
 
     def create_or_update_checkin(
         self, employee, time, log_type, company
@@ -655,7 +847,7 @@ class AttendanceRegularization(Document):
                 changes.append(
                     f"<b>Out Time:</b> {fmt_time(old.get('out_time'))} → <b>{fmt_time(out_time)}</b>"
                 )
-            old_wh = round(float(old.get("working_hours") or 0), 2)
+            old_wh = to_hours(old.get("working_hours"))
             if old_wh != working_hours:
                 changes.append(
                     f"<b>Working Hours:</b> {old_wh} → <b>{working_hours}</b>"
@@ -696,11 +888,11 @@ class AttendanceRegularization(Document):
     def on_cancel(self):
         """
         On cancellation:
-        - Delete matching Employee Checkin records.
-        - Cancel and delete matching Attendance records.
         - Set workflow_state to Canceled.
+        - Unlink this Attendance Regularization from all linked Attendance records (do NOT cancel or delete Attendance).
+        - If Attendance status was 'Work From Home' because of this regularization, reset status to 'Absent'.
+        - Delete matching Employee Checkin records created by this regularization (if any).
         """
-
         if self.workflow_state != "Canceled":
             self.workflow_state = "Canceled"
             self.db_set(
@@ -709,8 +901,78 @@ class AttendanceRegularization(Document):
                 update_modified=False,
             )
 
-        checkin_times = []
+        # 1. Find all Attendance records linked to this regularization
+        start_date = self.from_date or self.date
+        end_date = self.date
 
+        linked_attendances = frappe.get_all(
+            "Attendance",
+            filters={
+                "employee": self.employee,
+                "attendance_regularization": self.name,
+            },
+            fields=["name", "docstatus", "status"],
+        )
+
+        # Also search in date range if from_date is set
+        if start_date and end_date:
+            range_attendances = frappe.get_all(
+                "Attendance",
+                filters={
+                    "employee": self.employee,
+                    "attendance_date": ["between", [start_date, end_date]],
+                    "attendance_regularization": self.name,
+                },
+                fields=["name", "docstatus", "status"],
+            )
+            all_att_map = {a["name"]: a for a in linked_attendances}
+            for a in range_attendances:
+                all_att_map[a["name"]] = a
+            attendances_to_unlink = list(all_att_map.values())
+        else:
+            attendances_to_unlink = linked_attendances
+
+        # Unlink each Attendance record without cancelling or deleting it
+        for att in attendances_to_unlink:
+            try:
+                update_fields = {
+                    "attendance_regularization": None,
+                }
+                # Reset status to Absent if it was Work From Home
+                if att.get("status") == "Work From Home":
+                    update_fields["status"] = "Absent"
+
+                frappe.db.set_value(
+                    "Attendance",
+                    att["name"],
+                    update_fields,
+                    update_modified=True,
+                )
+
+                # If Frappe or any previous action set docstatus=2 (cancelled), restore it to submitted
+                if att.get("docstatus") == 2:
+                    frappe.db.set_value(
+                        "Attendance",
+                        att["name"],
+                        "docstatus",
+                        1,
+                        update_modified=False,
+                    )
+
+                frappe.logger().info(
+                    f"[Attendance Regularization] Unlinked {self.name} from Attendance {att['name']}"
+                )
+            except Exception:
+                frappe.log_error(
+                    title="Attendance Regularization Cancellation Error",
+                    message=(
+                        f"Error unlinking Attendance {att['name']}:\n"
+                        f"{frappe.get_traceback()}"
+                    ),
+                )
+
+        # 2. Delete Employee Checkins created by this regularization (for regular in/out regularization)
+        checkin_times = []
         if self.in_time:
             in_dt = (
                 datetime.combine(self.date, self.in_time)
@@ -727,101 +989,35 @@ class AttendanceRegularization(Document):
             )
             checkin_times.append(out_dt)
 
-        if not checkin_times:
-            frappe.logger().info(
-                "[Attendance Regularization] "
-                f"No check-in/out times found for {self.name}"
+        if checkin_times:
+            checkins_to_delete = frappe.get_all(
+                "Employee Checkin",
+                filters={
+                    "employee": self.employee,
+                    "time": ["in", checkin_times],
+                },
+                pluck="name",
             )
-            return
 
-        checkins_to_delete = frappe.get_all(
-            "Employee Checkin",
-            filters={
-                "employee": self.employee,
-                "time": ["in", checkin_times],
-            },
-            pluck="name",
-        )
-
-        for checkin_name in checkins_to_delete:
-            try:
-                frappe.delete_doc(
-                    "Employee Checkin",
-                    checkin_name,
-                    ignore_permissions=True,
-                )
-
-                frappe.logger().info(
-                    "[Attendance Regularization] "
-                    f"Deleted Employee Checkin: {checkin_name}"
-                )
-
-            except Exception:
-                frappe.log_error(
-                    title="Attendance Regularization Cancellation Error",
-                    message=(
-                        f"Error deleting Employee Checkin "
-                        f"{checkin_name}:\n"
-                        f"{frappe.get_traceback()}"
-                    ),
-                )
-
-        attendance_records = frappe.get_all(
-            "Attendance",
-            filters={
-                "employee": self.employee,
-                "attendance_date": self.date,
-            },
-            pluck="name",
-        )
-
-        for attendance_name in attendance_records:
-            try:
-                attendance_doc = frappe.get_doc(
-                    "Attendance", attendance_name
-                )
-
-                check_in = getattr(
-                    attendance_doc, "check_in", None
-                )
-                check_out = getattr(
-                    attendance_doc, "check_out", None
-                )
-
-                if (
-                    check_in in checkin_times
-                    or check_out in checkin_times
-                ):
-                    if attendance_doc.docstatus == 1:
-                        attendance_doc.cancel()
-
-                        frappe.logger().info(
-                            "[Attendance Regularization] "
-                            f"Canceled Attendance: {attendance_name}"
-                        )
-
+            for checkin_name in checkins_to_delete:
+                try:
                     frappe.delete_doc(
-                        "Attendance",
-                        attendance_name,
+                        "Employee Checkin",
+                        checkin_name,
                         ignore_permissions=True,
                     )
-
                     frappe.logger().info(
-                        "[Attendance Regularization] "
-                        f"Deleted Attendance: {attendance_name}"
+                        f"[Attendance Regularization] Deleted Employee Checkin: {checkin_name}"
+                    )
+                except Exception:
+                    frappe.log_error(
+                        title="Attendance Regularization Cancellation Error",
+                        message=(
+                            f"Error deleting Employee Checkin {checkin_name}:\n"
+                            f"{frappe.get_traceback()}"
+                        ),
                     )
 
-            except Exception:
-                frappe.log_error(
-                    title="Attendance Regularization Cancellation Error",
-                    message=(
-                        f"Error processing Attendance "
-                        f"{attendance_name}:\n"
-                        f"{frappe.get_traceback()}"
-                    ),
-                )
-
         frappe.msgprint(
-            "Related Employee Checkin and Attendance "
-            "records deleted successfully."
+            "Attendance Regularization unlinked from Attendance record(s) successfully."
         )

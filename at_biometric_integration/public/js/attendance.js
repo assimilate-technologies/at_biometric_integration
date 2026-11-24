@@ -3,6 +3,11 @@ frappe.ui.form.on('Attendance', {
         // Preload the status thresholds from Attendance Settings
         load_status_thresholds();
 
+        // Work From Home attendance — no in/out times needed, skip all sync
+        if (frm.doc.status === "Work From Home") {
+            return;
+        }
+
         // If in_time or out_time not set, but child checkins exist, sync from first and last checkin
         if ((!frm.doc.in_time || !frm.doc.out_time) && frm.doc.employee_checkin && frm.doc.employee_checkin.length > 0) {
             sync_times_from_child_checkins(frm);
@@ -24,6 +29,9 @@ frappe.ui.form.on('Attendance', {
 });
 
 function sync_times_from_child_checkins(frm) {
+    // Work From Home attendance — no in/out times, don't touch the form
+    if (frm.doc.status === "Work From Home") return;
+
     const rows = frm.doc.employee_checkin || [];
     const checkin_names = rows.map(r => r.checkin).filter(Boolean);
     if (!checkin_names.length) return;
@@ -62,6 +70,9 @@ function sync_times_from_child_checkins(frm) {
  * Uses frm.set_value() so the value is properly saved on next Save.
  */
 function calculate_and_set_working_hours(frm) {
+    // Work From Home — no working hours calculation needed
+    if (frm.doc.status === "Work From Home") return;
+
     // When in_time and out_time are identical (e.g. only one check-in record)
     if (frm.doc.in_time && frm.doc.out_time && frm.doc.in_time === frm.doc.out_time) {
         if (frm.doc.working_hours !== "00:00:00") {

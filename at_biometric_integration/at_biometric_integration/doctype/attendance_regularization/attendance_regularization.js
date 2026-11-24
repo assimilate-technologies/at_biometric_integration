@@ -25,6 +25,9 @@ frappe.ui.form.on("Attendance Regularization", {
             frm.set_value("is_work_from_home", 1);
         }
         toggle_time_mandatory(frm);
+        // from_date is always visible and mandatory
+        frm.set_df_property("from_date", "reqd", 1);
+        frm.set_df_property("from_date", "hidden", 0);
         if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
     },
 
@@ -34,11 +37,30 @@ frappe.ui.form.on("Attendance Regularization", {
         if (frm.doc.is_work_from_home) {
             // User checked WFH → force status to Work From Home
             frm.set_value("attendance_status", "Work From Home");
+            if (!frm.doc.from_date && frm.doc.date) {
+                frm.set_value("from_date", frm.doc.date);
+            }
         } else {
             // User unchecked WFH → recalculate from times
             update_attendance_status_from_times(frm);
         }
         toggle_time_mandatory(frm);
+        frm.set_df_property("from_date", "reqd", 1);
+        frm.set_df_property("from_date", "hidden", 0);
+    },
+
+    from_date: function (frm) {
+        // Validate that from_date is not after date
+        if (frm.doc.from_date && frm.doc.date) {
+            if (frm.doc.from_date > frm.doc.date) {
+                frappe.msgprint({
+                    title: __("Invalid From Date"),
+                    message: __("From Date cannot be after Date."),
+                    indicator: "red"
+                });
+                frm.set_value("from_date", frm.doc.date);
+            }
+        }
     },
 
     employee: async function (frm) {
@@ -46,6 +68,12 @@ frappe.ui.form.on("Attendance Regularization", {
     },
 
     date: async function (frm) {
+        // Default from_date to date if not already filled
+        if (!frm.doc.from_date && frm.doc.date) {
+            frm.set_value("from_date", frm.doc.date);
+        } else if (frm.doc.from_date && frm.doc.date && frm.doc.from_date > frm.doc.date) {
+            frm.set_value("from_date", frm.doc.date);
+        }
         if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
     },
 
@@ -69,6 +97,28 @@ frappe.ui.form.on("Attendance Regularization", {
 
     validate(frm) {
         toggle_time_mandatory(frm);
+        frm.set_df_property("from_date", "reqd", 1);
+        frm.set_df_property("from_date", "hidden", 0);
+
+        if (!frm.doc.from_date) {
+            frappe.validated = false;
+            frappe.msgprint({
+                title: __("Missing Mandatory Fields"),
+                message: __("From Date is mandatory."),
+                indicator: "red"
+            });
+            return;
+        }
+
+        if (frm.doc.date && frm.doc.from_date > frm.doc.date) {
+            frappe.validated = false;
+            frappe.msgprint({
+                title: __("Invalid Date Range"),
+                message: __("From Date cannot be after Date."),
+                indicator: "red"
+            });
+            return;
+        }
 
         if (!frm.doc.is_work_from_home) {
             update_attendance_status_from_times(frm);

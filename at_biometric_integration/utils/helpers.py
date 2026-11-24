@@ -331,6 +331,27 @@ def log_error(msg, title="Biometric Integration Error"):
         frappe.logger().error(f"{title}: {msg}")
 
 
+def get_employee_joining_date(employee):
+    """Return the employee's date_of_joining as a date, or None."""
+    if not employee:
+        return None
+    doj = frappe.db.get_value("Employee", employee, "date_of_joining", cache=True)
+    return getdate(doj) if doj else None
+
+
+def is_before_joining_date(employee, date):
+    """True if `date` is earlier than the employee's date_of_joining.
+
+    HRMS Attendance.validate_attendance_date() rejects such records on
+    insert/submit, so every creation and auto-submit path must check this
+    first instead of letting frappe.throw() blow up the scheduler.
+    """
+    if not date:
+        return False
+    joining_date = get_employee_joining_date(employee)
+    return bool(joining_date and getdate(date) < joining_date)
+
+
 def _time_to_seconds(val):
     """Convert a Time value (datetime.time or 'HH:MM:SS' string) to
     seconds since midnight. Returns 0 for empty/invalid values."""
@@ -561,6 +582,86 @@ def get_leave_status(employee, date):
     except Exception as e:
         log_error(frappe.get_traceback(), "get_leave_status")
         return (None, None, None)
+
+
+def is_half_day_leave(employee, date, leave_application=None):
+    """True when the Attendance is backed by a half-day Leave Application.
+
+    Primary check: the Leave Application linked on the Attendance
+    (`leave_application`) has the `half_day` checkbox checked.
+    Fallback: when nothing is linked, look for an approved half-day
+    Leave Application covering `date`.
+
+    When this returns True the Attendance status must be forced to
+    'Half Day' and the working_hours based status rules are skipped.
+    """
+    try:
+        if leave_application:
+            return bool(
+                frappe.db.get_value(
+                    "Leave Application", leave_application, "half_day"
+                )
+            )
+
+        if not employee or not date:
+            return False
+
+        leaves = frappe.get_all(
+            "Leave Application",
+            filters={
+                "employee": employee,
+                "from_date": ["<=", date],
+                "to_date": [">=", date],
+                "status": "Approved",
+                "docstatus": 1,
+                "half_day": 1,
+            },
+            fields=["name", "half_day_date"],
+            limit_page_length=1,
+        )
+        if not leaves:
+            return False
+
+        # a half-day leave only applies to its half_day_date
+        half_day_date = leaves[0].get("half_day_date")
+        return not half_day_date or getdate(half_day_date) == getdate(date)
+
+    except Exception:
+        log_error(frappe.get_traceback(), "is_half_day_leave")
+        return False
+
+
+def is_wfh_regularization(attendance_name):
+    """
+    Check if an Attendance record was created/updated by a Work From Home
+    Attendance Regularization (is_work_from_home = 1).
+    
+    Returns True if the attendance has attendance_regularization linked and
+    that regularization has is_work_from_home checked.
+    """
+    try:
+        if not attendance_name:
+            return False
+        
+        reg_name = frappe.db.get_value(
+            "Attendance",
+            attendance_name,
+            "attendance_regularization"
+        )
+        
+        if not reg_name:
+            return False
+            
+        return bool(
+            frappe.db.get_value(
+                "Attendance Regularization",
+                reg_name,
+                "is_work_from_home"
+            )
+        )
+    except Exception:
+        log_error(frappe.get_traceback(), "is_wfh_regularization")
+        return False
 
 
 # ------------------------------------------------

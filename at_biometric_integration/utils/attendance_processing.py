@@ -249,7 +249,7 @@ from datetime import datetime, timedelta
 from frappe.utils import get_datetime, now_datetime, getdate, add_days
 
 # helpers expected to exist in your repo (you referenced them before)
-from .helpers import get_leave_status, is_holiday, is_weekend, calculate_working_hours, determine_attendance_status, get_employee_shift, time_to_hours
+from .helpers import get_leave_status, is_holiday, is_weekend, calculate_working_hours, determine_attendance_status, get_employee_shift, time_to_hours, is_half_day_leave, is_wfh_regularization
 from .attendance_links import pick_checkin
 
 # ------------------
@@ -261,6 +261,49 @@ from .attendance_links import pick_checkin
 # - Attendance Settings single doctype contains the keys you listed (names used exactly as fields).
 # - calculate_working_hours(first_checkin, last_checkin) returns float hours.
 # ------------------
+
+
+def _get_wfh_reg_for_date(employee, date):
+    """Return the name of an approved WFH Attendance Regularization covering
+    `date` for `employee`, or None.
+    Covers both single-date WFH (regularization.date == date) and date-range
+    WFH (from_date <= date <= regularization.date).
+    """
+    try:
+        date = getdate(date)
+        # Exact date match
+        regs = frappe.get_all(
+            "Attendance Regularization",
+            filters={
+                "employee": employee,
+                "date": date,
+                "is_work_from_home": 1,
+                "docstatus": 1,
+                "workflow_state": ["like", "%Approved%"],
+            },
+            pluck="name",
+            limit=1,
+        )
+        if regs:
+            return regs[0]
+
+        # Date-range match (from_date <= date <= date field)
+        regs = frappe.get_all(
+            "Attendance Regularization",
+            filters={
+                "employee": employee,
+                "is_work_from_home": 1,
+                "from_date": ["<=", date],
+                "date": [">=", date],
+                "docstatus": 1,
+                "workflow_state": ["like", "%Approved%"],
+            },
+            pluck="name",
+            limit=1,
+        )
+        return regs[0] if regs else None
+    except Exception:
+        return None
 
 
 def sync_checkin_child_table(attendance_name, employee, attendance_date):
@@ -528,6 +571,19 @@ def update_attendance_on_checkin(doc, method=None):
             "name"
         )
 
+        # Skip WFH regularization attendance records entirely — don't overwrite
+        # their status with checkin-based logic
+        if existing_draft and is_wfh_regularization(existing_draft):
+            return
+        if not existing_draft:
+            _submitted_name = frappe.db.get_value(
+                "Attendance",
+                {"employee": employee, "attendance_date": checkin_date, "docstatus": 1},
+                "name"
+            )
+            if _submitted_name and is_wfh_regularization(_submitted_name):
+                return
+
         if existing_draft:
             update_data = {
                 "in_time": first_time,
@@ -676,6 +732,10 @@ def update_existing_attendance_status(from_date=None, to_date=None, employee=Non
         if r.leave_application or r.leave_type:
             continue
 
+        # Preserve Work From Home records set by Attendance Regularization
+        if is_wfh_regularization(r.name):
+            continue
+
         if not r.in_time or not r.out_time:
             work_hrs = "00:00:00"
             new_status = "Absent"
@@ -702,6 +762,10 @@ def check_min_working_hours_on_submit(doc, method=None):
     """
     before_submit hook on Attendance.
     Rules:
+      Linked Leave Application with half_day checked → status = 'Half Day'
+        (working_hours rules are skipped entirely)
+      Attendance Regularization with is_work_from_home checked → status = 'Work From Home'
+        (working_hours rules are skipped entirely)
       If in_time and out_time not present → status = 'Absent'
       working_hours < Attendance Settings.half_day_from
         (min_working_hour_for_half_day fallback)           → status = 'Absent'
@@ -713,6 +777,18 @@ def check_min_working_hours_on_submit(doc, method=None):
         Settings.half_day_to                               → status = 'Present'
     Approved Leave records are preserved as-is.
     """
+    # Work From Home regularization: force status and skip the working_hours rules
+    if is_wfh_regularization(doc.name):
+        doc.status = "Work From Home"
+        return
+
+    # Half-day leave: force status and skip the working_hours rules
+    if is_half_day_leave(
+        doc.get("employee"), doc.get("attendance_date"), doc.get("leave_application")
+    ):
+        doc.status = "Half Day"
+        return
+
     # Preserve approved leave applications
     if doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")):
         return
@@ -779,13 +855,28 @@ def auto_submit_attendance_doc(att_doc, settings=None):
             frappe.logger().info(f"Duplicate submitted attendance {duplicate_submitted} already exists for {doc.employee} on {doc.attendance_date}. Skipping draft {doc.name}.")
             return False
 
-        # 3. Ensure working_hours is calculated if in_time and out_time exist
-        if doc.in_time and doc.out_time:
-            doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
-        else:
-            doc.working_hours = "00:00:00"
+        # 3. Check if this attendance was set by a Work From Home regularization
+        #    If so, preserve the "Work From Home" status and skip working_hours rules
+        wfh_reg = is_wfh_regularization(doc.name)
 
-        # 4. Status rule:
+        # 4. Ensure working_hours is calculated if in_time and out_time exist
+        #    Half-day leave / WFH regularization: status is forced and the
+        #    working_hours rules are skipped entirely.
+        half_day_leave = is_half_day_leave(
+            doc.employee, doc.attendance_date, doc.get("leave_application")
+        )
+
+        if not half_day_leave and not wfh_reg:
+            if doc.in_time and doc.out_time:
+                doc.working_hours = calculate_working_hours(doc.in_time, doc.out_time)
+            else:
+                doc.working_hours = "00:00:00"
+
+        # 5. Status rule:
+        #    If linked Attendance Regularization has is_work_from_home checked → 'Work From Home'
+        #      (working_hours rules NOT applied)
+        #    If linked Leave Application has half_day checked → 'Half Day'
+        #      (working_hours rules NOT applied)
         #    If On Leave: preserved
         #    If in_time or out_time not present       → 'Absent'
         #    working_hours < Attendance Settings.
@@ -797,7 +888,11 @@ def auto_submit_attendance_doc(att_doc, settings=None):
         #      Settings.min_working_hours            → 'Present'
         is_on_leave = (doc.status == "On Leave" and (doc.get("leave_application") or doc.get("leave_type")))
 
-        if is_on_leave:
+        if wfh_reg:
+            doc.status = "Work From Home"
+        elif half_day_leave:
+            doc.status = "Half Day"
+        elif is_on_leave:
             pass
         elif not doc.in_time or not doc.out_time:
             doc.status = "Absent"
@@ -842,6 +937,7 @@ def update_attendance_statuses_backend(date=None):
         half_day_to (9 hr default)                        → status = 'Absent-Half Day'
         (grace window → 'Present', max 3 per employee per month)
       working_hours >= half_day_to                        → status = 'Present'
+    Half-day leave records (Leave Application with half_day checked) are preserved as 'Half Day'.
     """
     filters = {"status": ["!=", "Holiday"]}
     if date:
@@ -857,7 +953,16 @@ def update_attendance_statuses_backend(date=None):
 
     updated_count = 0
     for r in records:
+        # Preserve approved leave applications (including half-day leave)
         if r.status == "On Leave" and (r.leave_application or r.leave_type):
+            continue
+
+        # Preserve half-day leave records
+        if is_half_day_leave(r.employee, r.attendance_date, r.leave_application):
+            continue
+
+        # Preserve Work From Home records set by Attendance Regularization
+        if is_wfh_regularization(r.name):
             continue
 
         if not r.in_time or not r.out_time:
@@ -1108,6 +1213,11 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
         })
 
         if existing_draft:
+            # Skip WFH regularization attendance — don't overwrite their status
+            if is_wfh_regularization(existing_draft):
+                curr_date = add_days(curr_date, 1)
+                continue
+
             # Update draft attendance
             doc = frappe.get_doc("Attendance", existing_draft)
             doc.in_time = first_time
@@ -1143,6 +1253,11 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             if created_list is not None:
                 created_list.append(existing_draft)
         elif existing_submitted:
+            # Skip WFH regularization attendance — don't overwrite their status
+            if is_wfh_regularization(existing_submitted):
+                curr_date = add_days(curr_date, 1)
+                continue
+
             # Update submitted attendance - use db_set to update fields directly
             # This ensures we update the out_time even if attendance is submitted
             update_fields = {}
@@ -1280,17 +1395,23 @@ def generate_daily_absent():
                 leave_type = leave_status[1]
                 leave_application = leave_status[2]
             else:
-                # All employees (including Work From Home) start as Absent at midnight
-                # When a WFH employee creates a check-in record, status updates to Work From Home
-                status = "Absent"
-                leave_type = None
-                leave_application = None
+                # Check for approved WFH regularization covering today
+                wfh_reg = _get_wfh_reg_for_date(emp.name, today)
+                if wfh_reg:
+                    status = "Work From Home"
+                    leave_type = None
+                    leave_application = None
+                else:
+                    # All other employees start as Absent at midnight
+                    status = "Absent"
+                    leave_type = None
+                    leave_application = None
 
             # Resolve employee's shift for today
             shift_doc = get_employee_shift(emp.name, today)
             shift_name = shift_doc.name if shift_doc else (emp.default_shift or None)
 
-            att = frappe.get_doc({
+            att_args = {
                 "doctype": "Attendance",
                 "employee": emp.name,
                 "employee_name": emp.employee_name,
@@ -1300,7 +1421,12 @@ def generate_daily_absent():
                 "shift": shift_name,
                 "leave_type": leave_type,
                 "leave_application": leave_application,
-            })
+            }
+            # Link WFH regularization when status is Work From Home
+            if status == "Work From Home" and 'wfh_reg' in locals() and wfh_reg:
+                att_args["attendance_regularization"] = wfh_reg
+
+            att = frappe.get_doc(att_args)
             att.flags.ignore_permissions = True
             att.insert()
             created.append(att.name)
@@ -1460,6 +1586,7 @@ def sync_all_attendance_checkin_times(date=None):
       - Work From Home employees with NO check-ins -> 'Absent'
       - Office employees -> 'Absent' / 'Absent-Half Day' / 'Present' per working_hours rules
       - On Leave preserved
+      - Half Day leave (Leave Application with half_day checked) preserved as 'Half Day'
     """
     filters = {}
     if date:
@@ -1468,7 +1595,7 @@ def sync_all_attendance_checkin_times(date=None):
     attendances = frappe.get_all(
         "Attendance",
         filters=filters,
-        fields=["name", "employee", "attendance_date", "docstatus", "status"],
+        fields=["name", "employee", "attendance_date", "docstatus", "status", "leave_application"],
         order_by="attendance_date desc",
         limit_page_length=0,
     )
@@ -1476,6 +1603,10 @@ def sync_all_attendance_checkin_times(date=None):
     updated = 0
     for att in attendances:
         is_on_leave = (att.status == "On Leave")
+        # Check for half-day leave (Leave Application with half_day checked)
+        half_day_leave = is_half_day_leave(att.employee, att.attendance_date, att.get("leave_application"))
+        # Check for WFH regularization
+        wfh_reg = is_wfh_regularization(att.name)
         is_wfh = is_employee_wfh(att.employee)
 
         checkins = frappe.get_all(
@@ -1490,7 +1621,7 @@ def sync_all_attendance_checkin_times(date=None):
         )
 
         if not checkins:
-            if not is_on_leave and att.status != "Holiday":
+            if not is_on_leave and not half_day_leave and not wfh_reg and att.status != "Holiday":
                 frappe.db.set_value("Attendance", att.name, {
                     "in_time": None,
                     "out_time": None,
@@ -1511,7 +1642,13 @@ def sync_all_attendance_checkin_times(date=None):
             from at_biometric_integration.utils.helpers import calculate_working_hours
             hrs = calculate_working_hours(in_t, out_t)
 
-        if is_on_leave:
+        # Preserve WFH regularization status - don't recalculate based on working_hours
+        if wfh_reg:
+            new_status = "Work From Home"
+        # Preserve half-day leave status - don't recalculate based on working_hours
+        elif half_day_leave:
+            new_status = "Half Day"
+        elif is_on_leave:
             new_status = att.status
         elif in_t == out_t:
             new_status = "Absent"
