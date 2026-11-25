@@ -386,6 +386,53 @@ def is_employee_wfh(employee):
     return (work_type or "").strip().lower() == "work from home"
 
 
+def get_existing_attendance_name(employee, attendance_date):
+    """Return the name of ANY Attendance record (draft, submitted or cancelled)
+    for this employee on this date, or None.
+
+    This is the single source of truth for the scheduler and regularization
+    paths. If a record already exists we must never delete it and must never
+    insert a second record (especially not a fresh Draft) for the same
+    employee + date.
+    """
+    if not employee or not attendance_date:
+        return None
+    return frappe.db.get_value(
+        "Attendance",
+        {"employee": employee, "attendance_date": getdate(attendance_date)},
+        "name",
+        order_by="docstatus asc, creation asc",
+    )
+
+
+def prevent_attendance_delete_if_wfh_regularized(doc, method=None):
+    """on_trash guard for Attendance.
+
+    An Attendance record backed by a submitted Work From Home Attendance
+    Regularization belongs to that approved regularization. Deleting it makes
+    the approved WFH date disappear and lets the midnight scheduler create a
+    fresh Draft in its place. Block such deletes; the regularization must be
+    cancelled first if the attendance really has to go.
+    """
+    reg_name = doc.get("attendance_regularization")
+    if not reg_name:
+        return
+
+    reg = frappe.db.get_value(
+        "Attendance Regularization",
+        reg_name,
+        ["is_work_from_home", "docstatus"],
+        as_dict=True,
+    )
+    if reg and reg.is_work_from_home and reg.docstatus == 1:
+        frappe.throw(
+            frappe._(
+                "Attendance {0} is linked to approved Work From Home "
+                "regularization {1} and cannot be deleted."
+            ).format(doc.name, reg_name)
+        )
+
+
 def get_attendance_settings():
     """Fetch settings from single doctype. Provide defaults when missing."""
     try:
@@ -1228,6 +1275,17 @@ def process_employee_attendance_realtime(employee, shift, created_list=None, fro
             "docstatus": 1
         })
 
+        # Safety net: if a record exists in ANY state (including cancelled),
+        # never delete it and never insert a second Draft for the same
+        # employee + date.
+        if not existing_draft and not existing_submitted:
+            existing_any = get_existing_attendance_name(employee, curr_date)
+            if existing_any:
+                if created_list is not None:
+                    created_list.append(existing_any)
+                curr_date = add_days(curr_date, 1)
+                continue
+
         if existing_draft:
             # Skip WFH regularization attendance — don't overwrite their status
             if is_wfh_regularization(existing_draft):
@@ -1393,11 +1451,10 @@ def generate_daily_absent():
     created = []
     for emp in employees:
         try:
-            # Skip if an attendance record already exists (draft or submitted)
-            if frappe.db.exists(
-                "Attendance",
-                {"employee": emp.name, "attendance_date": today},
-            ):
+            # Skip if an attendance record already exists (draft or submitted).
+            # Never delete/replace an existing record and never create a second
+            # Draft record for the same employee + date.
+            if get_existing_attendance_name(emp.name, today):
                 continue
 
             # Skip weekends and holidays (Frappe HRMS uses Holiday List, 'Holiday' is not a valid Attendance status)
@@ -1445,6 +1502,20 @@ def generate_daily_absent():
             att = frappe.get_doc(att_args)
             att.flags.ignore_permissions = True
             att.insert()
+
+            # Approved WFH regularization: keep the record submitted (not a
+            # Draft) so the midnight job never leaves a Draft behind for a date
+            # that is already covered by an approved regularization.
+            if status == "Work From Home":
+                try:
+                    att.flags.ignore_permissions = True
+                    att.submit()
+                except Exception:
+                    frappe.log_error(
+                        title="generate_daily_absent WFH Submit Error",
+                        message=frappe.get_traceback(),
+                    )
+
             created.append(att.name)
 
         except Exception:

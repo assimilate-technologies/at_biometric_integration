@@ -662,6 +662,25 @@ class AttendanceRegularization(Document):
                 att_doc = frappe.get_doc("Attendance", existing_attendance.name)
                 att_doc.add_comment("Info", text=comment_text)
 
+            # If the existing record is still a Draft (for example the Draft
+            # created by the midnight absent scheduler), submit it now that the
+            # regularization is approved. This avoids leaving the first day of
+            # a WFH range behind in Draft status. We never delete/recreate it.
+            if existing_attendance.docstatus == 0:
+                try:
+                    draft_doc = frappe.get_doc("Attendance", existing_attendance.name)
+                    draft_doc.flags.ignore_permissions = True
+                    draft_doc.submit()
+                except Exception:
+                    frappe.log_error(
+                        title="Attendance Regularization WFH Submit Error",
+                        message=(
+                            f"Could not submit existing draft Attendance "
+                            f"{existing_attendance.name} for {self.name}:\n"
+                            f"{frappe.get_traceback()}"
+                        ),
+                    )
+
         else:
             # No attendance record for this date — create a new submitted one
             from at_biometric_integration.utils.helpers import get_employee_shift

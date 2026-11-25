@@ -165,6 +165,9 @@ doc_events = {
         "before_submit": [
             "at_biometric_integration.utils.attendance_processing.check_min_working_hours_on_submit",
         ],
+        "on_trash": [
+            "at_biometric_integration.utils.attendance_processing.prevent_attendance_delete_if_wfh_regularized",
+        ],
     },
     "Employee Checkin": {
         "validate": [
