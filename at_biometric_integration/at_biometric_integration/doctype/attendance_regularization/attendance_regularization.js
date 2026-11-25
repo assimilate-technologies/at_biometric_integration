@@ -1,6 +1,49 @@
 // -------------------- Attendance Regularization Client Script (Final) --------------------
+let reg_status_thresholds_loaded = false;
+let reg_floor_seconds = 5 * 3600;
+let reg_full_seconds = 9 * 3600;
+
+function load_reg_status_thresholds() {
+    return Promise.all([
+        frappe.db.get_single_value("Attendance Settings", "half_day_from"),
+        frappe.db.get_single_value("Attendance Settings", "half_day_to"),
+        frappe.db.get_single_value("Attendance Settings", "min_working_hour_for_half_day"),
+        frappe.db.get_single_value("Attendance Settings", "min_working_hours"),
+    ]).then(([halfDayFrom, halfDayTo, minHalfDay, minWorking]) => {
+        function toSec(val) {
+            if (!val) return 0;
+            const parts = String(val).trim().split(":");
+            if (parts.length >= 2) {
+                const h = parseFloat(parts[0]) || 0;
+                const m = parseFloat(parts[1]) || 0;
+                const s = parseFloat(parts[2]) || 0;
+                return h * 3600 + m * 60 + s;
+            }
+            return (parseFloat(val) || 0) * 3600;
+        }
+
+        const halfDayFromSeconds = toSec(halfDayFrom);
+        const halfDayToSeconds = toSec(halfDayTo);
+        const minHalfDaySeconds = toSec(minHalfDay);
+        const minWorkingSeconds = toSec(minWorking);
+
+        reg_floor_seconds = halfDayFromSeconds > 0
+            ? halfDayFromSeconds
+            : (minHalfDaySeconds > 0 ? minHalfDaySeconds : 5 * 3600);
+
+        reg_full_seconds = halfDayToSeconds > 0
+            ? halfDayToSeconds
+            : (minWorkingSeconds > 0 ? minWorkingSeconds : 9 * 3600);
+
+        reg_status_thresholds_loaded = true;
+    }).catch(() => {
+        reg_status_thresholds_loaded = true;
+    });
+}
+
 frappe.ui.form.on("Attendance Regularization", {
     onload: async function (frm) {
+        load_reg_status_thresholds();
         apply_read_only_rules(frm);
 
         // Auto-fill employee if logged-in user is an employee
@@ -173,6 +216,11 @@ function update_attendance_status_from_times(frm) {
     if (frm.doc.is_work_from_home) return;
     if (!frm.doc.in_time || !frm.doc.out_time) return;
 
+    if (!reg_status_thresholds_loaded) {
+        load_reg_status_thresholds().then(() => update_attendance_status_from_times(frm));
+        return;
+    }
+
     function parse_to_seconds(t) {
         if (!t) return 0;
         const parts = String(t).trim().split(":");
@@ -190,16 +238,17 @@ function update_attendance_status_from_times(frm) {
         diff += 24 * 3600;
     }
 
-    const FIVE_HOURS = 5 * 3600;                 // 18,000 seconds (5:00:00)
-    const EIGHT_FORTY_FIVE = 8 * 3600 + 45 * 60; // 31,500 seconds (8:45:00)
-
+    // Rules based on Attendance Settings (min_working_hour_for_half_day / half_day_from, min_working_hours / half_day_to):
+    // 1. diff < min_working_hour_for_half_day (half_day_from) -> 'Absent'
+    // 2. diff >= min_working_hours (half_day_to)              -> 'Present'
+    // 3. diff between half_day_from and half_day_to           -> 'Absent-Half Day'
     let status = "Present";
-    if (diff < FIVE_HOURS) {
+    if (diff < reg_floor_seconds) {
         status = "Absent";
-    } else if (diff < EIGHT_FORTY_FIVE) {
-        status = "Absent-Half Day";
-    } else {
+    } else if (diff >= reg_full_seconds) {
         status = "Present";
+    } else {
+        status = "Absent-Half Day";
     }
 
     if (frm.doc.attendance_status !== status) {

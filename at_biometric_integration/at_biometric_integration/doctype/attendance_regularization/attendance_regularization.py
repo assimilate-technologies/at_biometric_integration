@@ -275,15 +275,48 @@ class AttendanceRegularization(Document):
             if diff < 0:
                 diff += 24 * 3600
 
-            FIVE_HOURS = 5 * 3600                     # 18,000 seconds (5:00:00)
-            EIGHT_FORTY_FIVE = 8 * 3600 + 45 * 60     # 31,500 seconds (8:45:00)
+            # Thresholds from Attendance Settings:
+            # min_working_hour_for_half_day / half_day_from, min_working_hours / half_day_to
+            settings = frappe.get_single("Attendance Settings")
 
-            if diff < FIVE_HOURS:
+            def parse_threshold(val, default_hours=0):
+                if not val:
+                    return default_hours * 3600
+                if isinstance(val, (int, float)):
+                    return float(val) * 3600
+                if isinstance(val, timedelta):
+                    return val.total_seconds()
+                if isinstance(val, time):
+                    return val.hour * 3600 + val.minute * 60 + val.second
+                s = str(val).strip()
+                parts = s.split(":")
+                if len(parts) >= 2:
+                    try:
+                        h = float(parts[0])
+                        m = float(parts[1])
+                        sec = float(parts[2]) if len(parts) > 2 else 0.0
+                        return h * 3600 + m * 60 + sec
+                    except Exception:
+                        pass
+                try:
+                    return float(s) * 3600
+                except Exception:
+                    return default_hours * 3600
+
+            floor_sec = parse_threshold(getattr(settings, "half_day_from", None))
+            if floor_sec <= 0:
+                floor_sec = parse_threshold(getattr(settings, "min_working_hour_for_half_day", None), default_hours=5)
+
+            full_sec = parse_threshold(getattr(settings, "half_day_to", None))
+            if full_sec <= 0:
+                full_sec = parse_threshold(getattr(settings, "min_working_hours", None), default_hours=9)
+
+            if diff < floor_sec:
                 self.attendance_status = "Absent"
-            elif diff < EIGHT_FORTY_FIVE:
-                self.attendance_status = "Absent-Half Day"
-            else:
+            elif diff >= full_sec:
                 self.attendance_status = "Present"
+            else:
+                self.attendance_status = "Absent-Half Day"
 
     def validate(self):
         """
