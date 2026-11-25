@@ -29,12 +29,23 @@ def execute():
             {
                 "reqd": 1,
                 "hidden": 0,
+                "read_only": 0,
                 "depends_on": "",
                 "mandatory_depends_on": "",
                 "insert_after": "employee_name",
                 "description": "",
             },
         )
+
+    # Ensure field_order property setter includes from_date if present
+    import json
+    ps = frappe.db.get_value("Property Setter", {"doc_type": doctype, "property": "field_order"}, "value")
+    if ps:
+        order = json.loads(ps)
+        if "from_date" not in order:
+            idx = order.index("date") if "date" in order else 3
+            order.insert(idx, "from_date")
+            frappe.db.set_value("Property Setter", {"doc_type": doctype, "property": "field_order"}, "value", json.dumps(order))
 
     frappe.clear_cache(doctype=doctype)
 

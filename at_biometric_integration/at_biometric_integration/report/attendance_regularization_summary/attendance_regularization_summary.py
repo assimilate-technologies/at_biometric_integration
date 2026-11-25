@@ -715,7 +715,7 @@
 #             "parenttype": "Holiday List",
 #             "holiday_date": attendance_date,
 #         },
-#         ["weekly_off", "is_half_day"],
+#         ["weekly_off"],
 #         as_dict=True,
 #     )
 
@@ -724,7 +724,7 @@
 #             "weekly_off": (
 #                 bool(holiday.weekly_off) or weekly_off_day
 #             ),
-#             "is_half_day": bool(holiday.is_half_day),
+#             "is_half_day": False,
 #         }
 
 #     elif weekly_off_day:
@@ -1686,7 +1686,7 @@ def get_holiday_info(employee, shift_name, attendance_date, cache):
             "parenttype": "Holiday List",
             "holiday_date": attendance_date,
         },
-        ["weekly_off", "is_half_day"],
+        ["weekly_off"],
         as_dict=True,
     )
 
@@ -1695,7 +1695,7 @@ def get_holiday_info(employee, shift_name, attendance_date, cache):
             "weekly_off": (
                 bool(holiday.weekly_off) or weekly_off_day
             ),
-            "is_half_day": bool(holiday.is_half_day),
+            "is_half_day": False,
         }
 
     elif weekly_off_day:

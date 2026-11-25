@@ -68,10 +68,16 @@ frappe.ui.form.on("Attendance Regularization", {
             frm.set_value("is_work_from_home", 1);
         }
         toggle_time_mandatory(frm);
-        // from_date is always visible and mandatory
+        // from_date is always visible and mandatory by default (no WFH dependency)
         frm.set_df_property("from_date", "reqd", 1);
         frm.set_df_property("from_date", "hidden", 0);
-        frm.set_df_property("from_date", "read_only", frm.doc.is_work_from_home ? 0 : 1);
+        frm.set_df_property("from_date", "read_only", 0);
+
+        // When opened from report, keep date and from_date read-only
+        if (frm.doc.__islocal && frm.doc.reason && frm.doc.reason.includes("Report")) {
+            frm.set_df_property("date", "read_only", 1);
+            frm.set_df_property("from_date", "read_only", 1);
+        }
         if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
     },
 
@@ -84,14 +90,9 @@ frappe.ui.form.on("Attendance Regularization", {
             if (!frm.doc.from_date && frm.doc.date) {
                 frm.set_value("from_date", frm.doc.date);
             }
-            frm.set_df_property("from_date", "read_only", 0);
         } else {
             // User unchecked WFH → make attendance_status blank immediately
             frm.set_value("attendance_status", "");
-            if (frm.doc.date) {
-                frm.set_value("from_date", frm.doc.date);
-            }
-            frm.set_df_property("from_date", "read_only", 1);
         }
         toggle_time_mandatory(frm);
         frm.set_df_property("from_date", "reqd", 1);

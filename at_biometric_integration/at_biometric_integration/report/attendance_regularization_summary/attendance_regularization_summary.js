@@ -337,12 +337,14 @@ frappe.query_reports["Attendance Regularization Summary"] = {
                     attendance_status: row.status,
                     system_in_time: row.in_time !== "-" ? row.in_time : "",
                     system_out_time: row.out_time !== "-" ? row.out_time : "",
-                    in_time: row.in_time !== "-" ? row.in_time : "",
-                    out_time: row.out_time !== "-" ? row.out_time : ""
+                    in_time: "",
+                    out_time: "",
+                    reason: "Requested via Attendance Regularization Report"
                 }, doc => {
                     frappe.after_ajax(() => {
                         if (cur_frm && cur_frm.doctype === "Attendance Regularization") {
                             cur_frm.set_df_property("from_date", "read_only", 1);
+                            cur_frm.set_df_property("date", "read_only", 1);
                         }
                     });
                 });
