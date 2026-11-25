@@ -53,6 +53,7 @@ doctype_js = {
     "Interview": "public/js/interview_feedback_validation.js"
 }
 doctype_list_js = {
+    "Attendance": "public/js/attendance_list.js",
     "Employee Checkin": [
         "public/js/employee_checkin.js"
     ],
@@ -100,7 +101,7 @@ doctype_list_js = {
 # ------------
 
 # before_install = "at_biometric_integration.install.before_install"
-# after_install = "at_biometric_integration.install.after_install"
+after_install = "at_biometric_integration.patches.add_absent_half_day_status_option.execute"
 
 # Uninstallation
 # ------------
@@ -146,9 +147,9 @@ doctype_list_js = {
 # ---------------
 # Override standard doctype classes
 
-# override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
-# }
+override_doctype_class = {
+    "Attendance": "at_biometric_integration.overrides.attendance.CustomAttendance"
+}
 
 # Document Events
 # ---------------

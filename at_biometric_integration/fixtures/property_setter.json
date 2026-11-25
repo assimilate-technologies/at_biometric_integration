@@ -1,0 +1,18 @@
+[
+ {
+  "default_value": null,
+  "doc_type": "Attendance",
+  "docstatus": 0,
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocField",
+  "field_name": "status",
+  "is_system_generated": 1,
+  "modified": "2026-11-24 17:17:16.080282",
+  "module": null,
+  "name": "Attendance-status-options",
+  "property": "options",
+  "property_type": "Text",
+  "row_name": null,
+  "value": "\nPresent\nAbsent\nAbsent-Half Day\nOn Leave\nHalf Day\nWork From Home"
+ }
+]

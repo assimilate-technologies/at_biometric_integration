@@ -38,4 +38,5 @@ def execute():
     )
 
     frappe.clear_cache(doctype="Attendance")
+    frappe.db.commit()
     print(f"Attendance status options updated to:\n{new_options}")

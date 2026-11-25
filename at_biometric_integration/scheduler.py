@@ -3,7 +3,23 @@ import frappe
 from .utils import biometric_sync, checkin_processing, attendance_processing, auto_submit, cleanup
 from frappe.utils import now
 
+
+def ensure_absent_half_day_status_option():
+    try:
+        val = frappe.db.get_value(
+            "Property Setter",
+            {"doc_type": "Attendance", "field_name": "status", "property": "options"},
+            "value",
+        )
+        if not val or "Absent-Half Day" not in val:
+            from at_biometric_integration.patches.add_absent_half_day_status_option import execute
+            execute()
+    except Exception as e:
+        frappe.log_error(f"ensure_absent_half_day error: {e}", "ensure_absent_half_day_status_option")
+
+
 def run_attendance_scheduler():
+    ensure_absent_half_day_status_option()
     summary = {"time": now(), "devices": [], "created_checkins": 0, "created_attendance": 0, "submitted": 0, "errors": []}
     devices = frappe.get_all("Biometric Device Settings", fields=["device_ip", "device_port", "name"])
     if not devices:

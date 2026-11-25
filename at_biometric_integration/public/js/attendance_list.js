@@ -1,0 +1,18 @@
+frappe.listview_settings["Attendance"] = {
+    add_fields: ["status", "attendance_date"],
+    get_indicator: function (doc) {
+        if (["Present", "Work From Home"].includes(doc.status)) {
+            return [__(doc.status), "green", "status,=," + doc.status];
+        } else if (["Absent", "On Leave"].includes(doc.status)) {
+            return [__(doc.status), "red", "status,=," + doc.status];
+        } else if (["Half Day", "Absent-Half Day"].includes(doc.status)) {
+            return [__(doc.status), "orange", "status,=," + doc.status];
+        } else if (doc.status) {
+            return [
+                __(doc.status),
+                frappe.utils.guess_colour(doc.status),
+                "status,=," + doc.status,
+            ];
+        }
+    },
+};

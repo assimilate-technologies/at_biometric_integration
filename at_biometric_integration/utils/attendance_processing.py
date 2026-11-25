@@ -987,6 +987,20 @@ def update_attendance_statuses_backend(date=None):
     return {"updated": updated_count, "total": len(records)}
 
 
+def ensure_absent_half_day_status_option():
+    try:
+        val = frappe.db.get_value(
+            "Property Setter",
+            {"doc_type": "Attendance", "field_name": "status", "property": "options"},
+            "value",
+        )
+        if not val or "Absent-Half Day" not in val:
+            from at_biometric_integration.patches.add_absent_half_day_status_option import execute
+            execute()
+    except Exception as e:
+        frappe.log_error(f"ensure_absent_half_day error: {e}", "ensure_absent_half_day_status_option")
+
+
 def auto_submit_due_attendances(force=False, date=None):
     """
     Find attendance records that are due for auto-submission and submit them.
@@ -1007,6 +1021,7 @@ def auto_submit_due_attendances(force=False, date=None):
 
     This function is invoked from the scheduler every 10 minutes (*/10 * * * *).
     """
+    ensure_absent_half_day_status_option()
     settings = get_attendance_settings()
     now = now_datetime()
 
@@ -1068,6 +1083,7 @@ def process_attendance_realtime(from_date=None, to_date=None):
     Supports date ranges and ensures all active employees have records.
     Also dynamically re-processes all existing DRAFT attendance records.
     """
+    ensure_absent_half_day_status_option()
     from frappe.utils import getdate, add_days
     
     # If dates not provided, look at last 2 days by default to be safe
