@@ -28,6 +28,7 @@ frappe.ui.form.on("Attendance Regularization", {
         // from_date is always visible and mandatory
         frm.set_df_property("from_date", "reqd", 1);
         frm.set_df_property("from_date", "hidden", 0);
+        frm.set_df_property("from_date", "read_only", frm.doc.is_work_from_home ? 0 : 1);
         if (frm.doc.employee && frm.doc.date) await handle_full_flow(frm);
     },
 
@@ -40,9 +41,14 @@ frappe.ui.form.on("Attendance Regularization", {
             if (!frm.doc.from_date && frm.doc.date) {
                 frm.set_value("from_date", frm.doc.date);
             }
+            frm.set_df_property("from_date", "read_only", 0);
         } else {
-            // User unchecked WFH → recalculate from times
-            update_attendance_status_from_times(frm);
+            // User unchecked WFH → make attendance_status blank immediately
+            frm.set_value("attendance_status", "");
+            if (frm.doc.date) {
+                frm.set_value("from_date", frm.doc.date);
+            }
+            frm.set_df_property("from_date", "read_only", 1);
         }
         toggle_time_mandatory(frm);
         frm.set_df_property("from_date", "reqd", 1);
@@ -191,7 +197,7 @@ function update_attendance_status_from_times(frm) {
     if (diff < FIVE_HOURS) {
         status = "Absent";
     } else if (diff < EIGHT_FORTY_FIVE) {
-        status = "Half Day";
+        status = "Absent-Half Day";
     } else {
         status = "Present";
     }

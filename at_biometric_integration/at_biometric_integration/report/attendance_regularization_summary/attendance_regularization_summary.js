@@ -155,6 +155,7 @@
 
 //                 frappe.new_doc("Attendance Regularization", {
 //                     employee: row.employee,
+//                     from_date: row.attendance_date,
 //                     date: row.attendance_date,
 //                     attendance_status: row.status,
 //                     system_in_time: row.in_time !== "-" ? row.in_time : "",
@@ -331,12 +332,19 @@ frappe.query_reports["Attendance Regularization Summary"] = {
 
                 frappe.new_doc("Attendance Regularization", {
                     employee: row.employee,
+                    from_date: row.attendance_date,
                     date: row.attendance_date,
                     attendance_status: row.status,
                     system_in_time: row.in_time !== "-" ? row.in_time : "",
                     system_out_time: row.out_time !== "-" ? row.out_time : "",
                     in_time: row.in_time !== "-" ? row.in_time : "",
                     out_time: row.out_time !== "-" ? row.out_time : ""
+                }, doc => {
+                    frappe.after_ajax(() => {
+                        if (cur_frm && cur_frm.doctype === "Attendance Regularization") {
+                            cur_frm.set_df_property("from_date", "read_only", 1);
+                        }
+                    });
                 });
             }
         );

@@ -194,6 +194,9 @@
 #         )
 
 #         # 5. Fetch Leave Type Classification
+#         # is_lwp checked   = Unpaid Leave
+#         # is_lwp unchecked = Paid Leave
+
 #         leave_type_map = {}
 
 #         leave_types = frappe.get_all(
@@ -202,16 +205,10 @@
 #         )
 
 #         for leave_type in leave_types:
-#             leave_type_name = (leave_type.name or "").strip().lower()
-
-#             if leave_type_name == "paid leave":
-#                 leave_type_map[leave_type.name] = "paid"
-
-#             elif leave_type.is_lwp:
+#             if leave_type.is_lwp:
 #                 leave_type_map[leave_type.name] = "unpaid"
-
 #             else:
-#                 leave_type_map[leave_type.name] = "normal"
+#                 leave_type_map[leave_type.name] = "paid"
 
 #         # 6. Initialize Grand Totals
 #         totals = {
@@ -309,9 +306,9 @@
 #                     # Every On Leave record counts in Leave
 #                     leave += 1
 
-#                     # Paid and Unpaid are also counted separately
+#                     # Classify using Leave Type is_lwp checkbox
 #                     leave_category = leave_type_map.get(
-#                         leave_type, "normal"
+#                         leave_type
 #                     )
 
 #                     if leave_category == "paid":
@@ -506,8 +503,6 @@
 
 
 
-
-
 import frappe
 import json
 from frappe.utils import getdate, nowdate
@@ -537,7 +532,6 @@ def execute(filters=None):
             {"label": "Employee", "fieldname": "employee", "fieldtype": "Link", "options": "Employee", "width": 160},
             {"label": "Employee Name", "fieldname": "employee_name", "fieldtype": "Data", "width": 160},
             {"label": "Present", "fieldname": "present", "fieldtype": "Data", "width": 100},
-            {"label": "Leave", "fieldname": "leave", "fieldtype": "Data", "width": 100},
             {"label": "No Of Weekends", "fieldname": "no_of_weekends", "fieldtype": "Data", "width": 100},
             {"label": "No Of Holidays", "fieldname": "no_of_holidays", "fieldtype": "Data", "width": 100},
             {"label": "Absent", "fieldname": "absent", "fieldtype": "Data", "width": 100},
@@ -546,7 +540,6 @@ def execute(filters=None):
             {"label": "Paid Leave", "fieldname": "paid_leave", "fieldtype": "Data", "width": 140},
             {"label": "Unpaid Leave", "fieldname": "unpaid_leave", "fieldtype": "Data", "width": 140},
             {"label": "Work From Home", "fieldname": "wfh", "fieldtype": "Data", "width": 120},
-            {"label": "Total Absent", "fieldname": "total_absent", "fieldtype": "Data", "width": 100},
             {"label": "Total Working Days", "fieldname": "total_working_days", "fieldtype": "Data", "width": 100},
             {"label": "Payment Days", "fieldname": "payment_days", "fieldtype": "Data", "width": 100},
         ]
@@ -786,7 +779,7 @@ def execute(filters=None):
             paid_leave = 0
             unpaid_leave = 0
 
-            # 10. Count Actual Attendance Records
+            # 10. Count Actual Attendance Records  ************
             for attendance_date in all_dates:
 
                 record = emp_attendance.get(attendance_date)
@@ -856,17 +849,25 @@ def execute(filters=None):
                 # Total calendar days in selected date range
                 "total_working_days": total_date_range_days,
 
-                # Payment Days calculation
-                "payment_days": (
-                    paid_leave
-                    + len(final_holidays)
-                    + len(weekend_dates)
-                    + present
-                    + (half_day * 0.5)
-                    + wfh
-                    + (absent * 0.5)
-                    + (absent_half_day * 0.5)
-                ),
+                #   # Payment Days calculation
+                #                            "payment_days": (
+                #                                total_date_range_days
+                #                                - absent
+                #                                - unpaid_leave
+                #                                - (absent_half_day * 0.5)
+                #                            ),
+                            
+
+              # Payment Days calculation
+                  "payment_days": (
+                   paid_leave
+                   + len(final_holidays)
+                   + len(weekend_dates)
+                   + present
+                   + (half_day)
+                   + wfh
+                   + (absent_half_day * 0.5)
+),
             }
 
             # 12. Update Grand Totals

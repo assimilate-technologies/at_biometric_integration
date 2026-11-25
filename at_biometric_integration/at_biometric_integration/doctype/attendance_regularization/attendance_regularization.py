@@ -281,7 +281,7 @@ class AttendanceRegularization(Document):
             if diff < FIVE_HOURS:
                 self.attendance_status = "Absent"
             elif diff < EIGHT_FORTY_FIVE:
-                self.attendance_status = "Half Day"
+                self.attendance_status = "Absent-Half Day"
             else:
                 self.attendance_status = "Present"
 
@@ -528,14 +528,16 @@ class AttendanceRegularization(Document):
         # Handle Work From Home (single date or date range)
         if self.is_work_from_home:
             from frappe.utils import getdate, add_days
+            from at_biometric_integration.utils.helpers import is_weekend
             # If from_date is set, process date range; otherwise single date
             start_date = getdate(self.from_date) if self.from_date else getdate(self.date)
             end_date = getdate(self.date)
 
             curr_date = start_date
             while curr_date <= end_date:
-                # Create/update attendance record for each date with Work From Home status
-                self._create_or_update_wfh_attendance(employee_details, curr_date)
+                # Saturday and Sunday are holidays: do not create attendance records on weekends
+                if not is_weekend(curr_date):
+                    self._create_or_update_wfh_attendance(employee_details, curr_date)
                 curr_date = add_days(curr_date, 1)
 
             # Backfill attendance_regularization link on ALL attendance records
@@ -586,6 +588,9 @@ class AttendanceRegularization(Document):
         """
         Create or update Attendance record for Work From Home on a specific date.
         """
+        from at_biometric_integration.utils.helpers import is_weekend
+        if is_weekend(attendance_date):
+            return
         existing_attendance = frappe.db.get_value(
             "Attendance",
             {
@@ -712,16 +717,19 @@ class AttendanceRegularization(Document):
         Works on both draft (docstatus=0) and submitted (docstatus=1) records.
         """
         from frappe.utils import getdate
+        from at_biometric_integration.utils.helpers import is_weekend
         attendance_records = frappe.get_all(
             "Attendance",
             filters={
                 "employee": self.employee,
                 "attendance_date": ["between", [getdate(start_date), getdate(end_date)]],
             },
-            fields=["name", "docstatus", "attendance_regularization", "status"],
+            fields=["name", "docstatus", "attendance_regularization", "status", "attendance_date"],
         )
 
         for att in attendance_records:
+            if is_weekend(att.get("attendance_date")):
+                continue
             update_fields = {}
 
             # Link this regularization if not already linked

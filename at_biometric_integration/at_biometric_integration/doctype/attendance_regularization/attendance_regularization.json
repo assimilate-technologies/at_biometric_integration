@@ -54,7 +54,7 @@
       "fieldname": "attendance_status",
       "fieldtype": "Select",
       "label": "Attendance Status",
-      "options": "\nPresent\nAbsent\nHalf Day\nWork From Home",
+      "options": "\nPresent\nAbsent\nAbsent-Half Day\nWork From Home",
       "reqd": 0,
       "read_only": 1,
       "in_list_view": 1

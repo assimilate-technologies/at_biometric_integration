@@ -305,6 +305,7 @@ function openAttendanceRegularizationForm(employee, employee_name, attendance_da
     frappe.new_doc("Attendance Regularization", {
         employee,
         employee_name,
+        from_date: attendance_date,
         date: attendance_date,
         shift_start,
         shift_end,
@@ -312,5 +313,11 @@ function openAttendanceRegularizationForm(employee, employee_name, attendance_da
         out_time,
         attendance_status: status,
         reason: "Requested via Attendance Regularization Report",
+    }, doc => {
+        frappe.after_ajax(() => {
+            if (cur_frm && cur_frm.doctype === "Attendance Regularization") {
+                cur_frm.set_df_property("from_date", "read_only", 1);
+            }
+        });
     });
 }
